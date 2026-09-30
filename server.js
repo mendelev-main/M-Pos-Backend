@@ -197,7 +197,7 @@ app.post("/api/operational/snapshot", async (req, res) => {
     const auth = await operationalDevice(req);
     if (auth.error) return res.status(auth.status).json({ error: auth.error });
     if (!validateOperationalVersion(req.body)) return res.status(409).json({ error: "Unsupported operational schema version", expected: OPERATIONAL_SCHEMA_VERSION });
-    if (!req.body?.production || typeof req.body.production !== "object") return res.status(400).json({ error: "Missing production snapshot" });
+    if (!req.body?.demand || typeof req.body.demand !== "object" || typeof req.body.demand.overload !== "boolean") return res.status(400).json({ error: "Missing demand snapshot" });
     const receivedAt = new Date().toISOString(),sampledAt = new Date(req.body?.sampledAt || receivedAt),revision=Number(req.body?.revision);
     if (Number.isNaN(sampledAt.getTime())) return res.status(400).json({ error: "Invalid sampledAt" });
     if (!Number.isSafeInteger(revision) || revision <= 0) return res.status(400).json({ error: "Invalid snapshot revision" });
@@ -339,36 +339,15 @@ function etaFromSnapshot(snapshot, work, now=Date.now(), requestedReadyAt=null) 
   const ranged=etaRange(criticalMinutes+safetyMinutes);
   return {criticalStation,delayingStations,loadedStations,customerLoadState,waitIncreasedByLoad:delayingStations.length>0,estimatedMinutes:Math.round((criticalMinutes+safetyMinutes)*100)/100,...ranged};
 }
-app.post("/api/eta/estimate", async (req, res) => {
+app.post("/api/eta/estimate", async (_req, res) => {
   try {
-    const rawItems=Array.isArray(req.body?.items)?req.body.items:[];
-    if (!rawItems.length) return res.status(400).json({error:"Cart is empty"});
     const stateResult=await latestFreshOperationalState();
-    if (!stateResult.available) return res.json(etaUnavailable());
-    const snapshot=stateResult.state;
-    if (Number(snapshot?.prepCatalog?.version)!==1 || !Array.isArray(snapshot?.prepCatalog?.items)) return res.json(etaUnavailable());
-    const productIds=[], modifierIds=[];
-    for (const item of rawItems) {
-      const id=String(item?.productId||"").trim(); if(!id)return res.status(400).json({error:"Invalid productId"}); productIds.push(id);
-      for(const mod of (Array.isArray(item?.modifiers)?item.modifiers:[])){const mid=String(mod?.productId||"").trim();if(!mid)return res.status(400).json({error:"Invalid modifier productId"});modifierIds.push(mid);}
-    }
-    const ids=[...new Set([...productIds,...modifierIds])];
-    const {data:products,error}=await supabase.from("products").select("id,external_id").in("id",ids).eq("is_active",true).eq("available_online",true);
-    if(error)throw error;
-    if((products||[]).length!==ids.length)return res.status(400).json({error:"One or more products are unavailable"});
-    const externalById=new Map((products||[]).map(p=>[String(p.id),String(p.external_id)]));
-    const prepByExternalId=new Map(snapshot.prepCatalog.items.map(x=>[String(x.productId),x.prep]));
-    const lines=rawItems.map(item=>({externalId:externalById.get(String(item.productId)),qty:Number(item.qty??item.quantity),modifiers:(Array.isArray(item.modifiers)?item.modifiers:[]).map(m=>({externalId:externalById.get(String(m.productId)),qty:Number(m.qty??m.quantity)}))}));
-    let work; try{work=etaPrepWork(lines,prepByExternalId);}catch(e){if(["PREP_MISSING","PREP_INCOMPATIBLE"].includes(e.message))return res.json(etaUnavailable());return res.status(400).json({error:"Invalid cart"});}
-    const requestedRaw=req.body?.requestedReadyAt;
-    const requestedReadyAt=requestedRaw?new Date(requestedRaw).getTime():null;
-    if(requestedRaw && (!Number.isFinite(requestedReadyAt)||requestedReadyAt<=Date.now())) return res.status(400).json({error:"Invalid requestedReadyAt"});
-    const estimate=etaFromSnapshot(snapshot,work,Date.now(),requestedReadyAt);
-    if(!estimate.criticalStation)return res.json({available:true,minMinutes:0,maxMinutes:0,customerLoadState:"NORMAL",criticalStation:null,loadedStations:[],waitIncreasedByLoad:false,calculatedAt:new Date().toISOString(),validForSeconds:ETA_VALID_FOR_SECONDS,engineVersion:ETA_ENGINE_VERSION});
-    return res.json({available:true,minMinutes:estimate.minMinutes,maxMinutes:estimate.maxMinutes,customerLoadState:estimate.customerLoadState,criticalStation:estimate.criticalStation,loadedStations:estimate.loadedStations,waitIncreasedByLoad:estimate.waitIncreasedByLoad,calculatedAt:new Date().toISOString(),validForSeconds:ETA_VALID_FOR_SECONDS,engineVersion:ETA_ENGINE_VERSION});
+    if (!stateResult.available) return res.json({available:false,demandState:"UNAVAILABLE"});
+    const overload=stateResult.state?.demand?.overload===true;
+    return res.json({available:true,demandState:overload?"OVERLOAD":"NORMAL",overload,calculatedAt:new Date().toISOString(),validForSeconds:ETA_VALID_FOR_SECONDS});
   } catch(error) {
     console.error("POST /api/eta/estimate:",error);
-    return res.json(etaUnavailable());
+    return res.json({available:false,demandState:"UNAVAILABLE"});
   }
 });
 
