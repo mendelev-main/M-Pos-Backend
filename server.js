@@ -227,6 +227,133 @@ app.get("/api/operational/state", async (req, res) => {
   }
 });
 
+
+const ETA_ENGINE_VERSION = 1;
+const ETA_STATIONS = ["bar", "kitchen"];
+const ETA_VALID_FOR_SECONDS = 45;
+function etaBatchFactor(qty) {
+  const q = Math.max(0, Number(qty) || 0);
+  return q <= 1 ? q : 1 + (q - 1) * 0.72;
+}
+function etaDifficultyMultiplier(value) {
+  const d = Math.max(1, Math.min(5, Number(value) || 1));
+  return [0, 0.80, 0.95, 1.10, 1.30, 1.55][d];
+}
+function etaLoadLevel(waitMinutes) {
+  const n = Math.max(0, Number(waitMinutes) || 0);
+  return n >= 30 ? "HIGH" : n >= 15 ? "ELEVATED" : "NORMAL";
+}
+function etaFindSlot(startAt, durationMinutes, reservations) {
+  let start = Math.max(0, Number(startAt) || 0), duration = Math.max(0, Number(durationMinutes) || 0) * 60000;
+  for (const r of (reservations || []).slice().sort((a,b)=>a.startAt-b.startAt)) {
+    if (start + duration <= r.startAt) break;
+    if (start < r.endAt && start + duration > r.startAt) start = r.endAt;
+  }
+  return start;
+}
+function etaRange(minutes) {
+  const n = Math.max(0, Number(minutes) || 0);
+  const buckets = [[0,10,15],[15,15,20],[20,20,30],[30,30,40],[40,40,50],[50,50,60]];
+  for (const [,min,max] of buckets) if (n <= max) return { minMinutes:min, maxMinutes:max };
+  return { minMinutes:60, maxMinutes:null };
+}
+function etaUnavailable(reason="POS_STATE_UNAVAILABLE") {
+  return { available:false, reason, message:"Не смогли рассчитать примерное время приготовления" };
+}
+async function latestFreshOperationalState() {
+  const { data: devices, error: deviceError } = await supabase.from("devices").select("id").eq("is_active", true);
+  if (deviceError) throw deviceError;
+  const ids = (devices || []).map(x=>x.id);
+  if (!ids.length) return { available:false, reason:"missing" };
+  const { data: rows, error } = await supabase.from("operational_states").select("device_id,schema_version,engine_version,heartbeat_at,snapshot_sampled_at,snapshot_received_at,snapshot").in("device_id", ids).order("heartbeat_at",{ascending:false}).limit(10);
+  if (error) throw error;
+  const now = Date.now();
+  for (const row of (rows || [])) {
+    const heartbeatAt = row.heartbeat_at ? new Date(row.heartbeat_at).getTime() : 0;
+    const sampledAt = row.snapshot_sampled_at ? new Date(row.snapshot_sampled_at).getTime() : 0;
+    const compatible = Number(row.schema_version) === OPERATIONAL_SCHEMA_VERSION && Number(row.engine_version) === ETA_ENGINE_VERSION && Number(row.snapshot?.schemaVersion) === OPERATIONAL_SCHEMA_VERSION && Number(row.snapshot?.engineVersion) === ETA_ENGINE_VERSION;
+    const heartbeatAge = heartbeatAt ? Math.max(0, now-heartbeatAt) : Infinity;
+    const snapshotAge = sampledAt ? Math.max(0, now-sampledAt) : Infinity;
+    if (compatible && row.snapshot && heartbeatAge <= OPERATIONAL_FRESH_MS && snapshotAge <= OPERATIONAL_FRESH_MS) return { available:true, state:row.snapshot };
+  }
+  return { available:false, reason:(rows || []).length ? "stale_or_incompatible" : "missing" };
+}
+function etaPrepWork(lines, prepByExternalId) {
+  const result = {bar:{durationMinutes:0,workPoints:0},kitchen:{durationMinutes:0,workPoints:0}};
+  const add = (externalId, qty) => {
+    const prep = prepByExternalId.get(String(externalId));
+    if (!prep) throw new Error("PREP_MISSING");
+    const station = prep.station;
+    if (station === "none") return;
+    if (!ETA_STATIONS.includes(station)) throw new Error("PREP_INCOMPATIBLE");
+    const q = Number(qty);
+    if (!Number.isFinite(q) || q <= 0 || q > 99) throw new Error("INVALID_QTY");
+    result[station].durationMinutes += Math.max(1,Number(prep.basePrepMinutes)||1) * etaBatchFactor(q);
+    result[station].workPoints += q * etaDifficultyMultiplier(prep.difficulty);
+  };
+  for (const line of lines) {
+    add(line.externalId, line.qty);
+    for (const mod of (line.modifiers || [])) add(mod.externalId, Number(line.qty) * Number(mod.qty));
+  }
+  for (const row of Object.values(result)) {
+    row.durationMinutes=Math.round(row.durationMinutes*100)/100;
+    row.workPoints=Math.round(row.workPoints*100)/100;
+  }
+  return result;
+}
+function etaFromSnapshot(snapshot, work, now=Date.now()) {
+  const stations={}, cartStations=ETA_STATIONS.filter(st=>work[st].durationMinutes>0);
+  for (const station of ETA_STATIONS) {
+    const currentWait=Math.max(0,Number(snapshot?.production?.stations?.[station]?.waitMinutes)||0);
+    const reservations=(snapshot?.scheduled||[]).map(o=>{
+      const duration=Math.max(0,Number(o?.work?.[station]?.durationMinutes)||0),ready=Number(o?.requestedReadyAt)||0;
+      return duration&&ready ? {startAt:ready-duration*60000,endAt:ready} : null;
+    }).filter(Boolean);
+    const duration=work[station].durationMinutes;
+    const start=duration ? etaFindSlot(now+currentWait*60000,duration,reservations) : now;
+    const wait=duration ? Math.max(0,(start-now)/60000) : 0;
+    const completion=duration ? wait+duration : 0;
+    stations[station]={waitMinutes:Math.round(wait*100)/100,durationMinutes:duration,completionMinutes:Math.round(completion*100)/100,loadState:etaLoadLevel(wait)};
+  }
+  const criticalStation=cartStations.length?cartStations.slice().sort((a,b)=>stations[b].completionMinutes-stations[a].completionMinutes)[0]:null;
+  const criticalMinutes=criticalStation?stations[criticalStation].completionMinutes:0;
+  const delayingStations=cartStations.filter(st=>stations[st].waitMinutes>0&&stations[st].completionMinutes>=criticalMinutes-3);
+  const loadedStations=delayingStations.filter(st=>stations[st].loadState!=="NORMAL").map(st=>({station:st,loadState:stations[st].loadState}));
+  const customerLoadState=loadedStations.some(x=>x.loadState==="HIGH")?"HIGH":loadedStations.length?"ELEVATED":"NORMAL";
+  const safetyMinutes=criticalMinutes>0?Math.max(2,criticalMinutes*0.10):0;
+  const ranged=etaRange(criticalMinutes+safetyMinutes);
+  return {criticalStation,delayingStations,loadedStations,customerLoadState,waitIncreasedByLoad:delayingStations.length>0,estimatedMinutes:Math.round((criticalMinutes+safetyMinutes)*100)/100,...ranged};
+}
+app.post("/api/eta/estimate", async (req, res) => {
+  try {
+    const rawItems=Array.isArray(req.body?.items)?req.body.items:[];
+    if (!rawItems.length) return res.status(400).json({error:"Cart is empty"});
+    const stateResult=await latestFreshOperationalState();
+    if (!stateResult.available) return res.json(etaUnavailable());
+    const snapshot=stateResult.state;
+    if (Number(snapshot?.prepCatalog?.version)!==1 || !Array.isArray(snapshot?.prepCatalog?.items)) return res.json(etaUnavailable());
+    const productIds=[], modifierIds=[];
+    for (const item of rawItems) {
+      const id=String(item?.productId||"").trim(); if(!id)return res.status(400).json({error:"Invalid productId"}); productIds.push(id);
+      for(const mod of (Array.isArray(item?.modifiers)?item.modifiers:[])){const mid=String(mod?.productId||"").trim();if(!mid)return res.status(400).json({error:"Invalid modifier productId"});modifierIds.push(mid);}
+    }
+    const ids=[...new Set([...productIds,...modifierIds])];
+    const {data:products,error}=await supabase.from("products").select("id,external_id").in("id",ids).eq("is_active",true).eq("available_online",true);
+    if(error)throw error;
+    if((products||[]).length!==ids.length)return res.status(400).json({error:"One or more products are unavailable"});
+    const externalById=new Map((products||[]).map(p=>[String(p.id),String(p.external_id)]));
+    const prepByExternalId=new Map(snapshot.prepCatalog.items.map(x=>[String(x.productId),x.prep]));
+    const lines=rawItems.map(item=>({externalId:externalById.get(String(item.productId)),qty:Number(item.qty??item.quantity),modifiers:(Array.isArray(item.modifiers)?item.modifiers:[]).map(m=>({externalId:externalById.get(String(m.productId)),qty:Number(m.qty??m.quantity)}))}));
+    let work; try{work=etaPrepWork(lines,prepByExternalId);}catch(e){if(["PREP_MISSING","PREP_INCOMPATIBLE"].includes(e.message))return res.json(etaUnavailable());return res.status(400).json({error:"Invalid cart"});}
+    const estimate=etaFromSnapshot(snapshot,work,Date.now());
+    if(!estimate.criticalStation)return res.json({available:true,minMinutes:0,maxMinutes:0,customerLoadState:"NORMAL",criticalStation:null,loadedStations:[],waitIncreasedByLoad:false,calculatedAt:new Date().toISOString(),validForSeconds:ETA_VALID_FOR_SECONDS,engineVersion:ETA_ENGINE_VERSION});
+    return res.json({available:true,minMinutes:estimate.minMinutes,maxMinutes:estimate.maxMinutes,customerLoadState:estimate.customerLoadState,criticalStation:estimate.criticalStation,loadedStations:estimate.loadedStations,waitIncreasedByLoad:estimate.waitIncreasedByLoad,calculatedAt:new Date().toISOString(),validForSeconds:ETA_VALID_FOR_SECONDS,engineVersion:ETA_ENGINE_VERSION});
+  } catch(error) {
+    console.error("POST /api/eta/estimate:",error);
+    return res.json(etaUnavailable());
+  }
+});
+
 app.get("/api/menu", async (_req, res) => {
   try {
     const { data: categories, error: categoriesError } = await supabase.from("categories").select("id,name,color,sort_order,is_active,external_id").eq("is_active", true).order("sort_order", { ascending: true }).order("name", { ascending: true });
