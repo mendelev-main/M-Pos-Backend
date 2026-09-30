@@ -34,8 +34,7 @@ app.get("/health", (_req, res) => res.json({ ok: true, service: "prilavok-backen
 
 app.post("/api/checkout", async (req, res) => {
   try {
-    const returnBaseUrl = `${req.protocol}://${req.get("host")}`;
-    const result = await checkout.create(req.body, returnBaseUrl);
+    const result = await checkout.create(req.body);
     if (result.error) return res.status(result.status || 400).json({ error: result.error });
     return res.status(201).json(result);
   } catch (error) {
@@ -48,7 +47,7 @@ app.get("/api/checkout/:token", async (req, res) => {
   try {
     const session = await checkout.get(String(req.params.token || ""));
     if (!session) return res.status(404).json({ error: "Оформление не найдено" });
-    return res.json({ status: session.status, expiresAt: session.expires_at, trackingToken: session.tracking_token || null, orderId: session.order_id || null });
+    return res.json({ status: session.status, expiresAt: session.expires_at, orderId: session.order_id || null });
   } catch (error) {
     console.error("GET /api/checkout/:token:", error);
     return res.status(500).json({ error: "Не удалось проверить оформление" });
@@ -93,7 +92,7 @@ app.post("/api/phone-verification/:token/confirm", async (req, res) => {
     if (finalized && !finalized.ok) {
       return res.status(409).json({ ok: false, error: "Не удалось завершить оформление заказа", reason: finalized.reason });
     }
-    return res.json({ ...result, orderCreated: Boolean(finalized?.ok), trackingToken: finalized?.trackingToken || null });
+    return res.json({ ...result, orderCreated: Boolean(finalized?.ok) });
   } catch (error) {
     console.error("POST /api/phone-verification/:token/confirm:", error);
     return res.status(500).json({ ok: false, error: "Не удалось подтвердить номер" });
