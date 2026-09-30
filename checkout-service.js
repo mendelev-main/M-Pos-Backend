@@ -91,6 +91,38 @@ export function createCheckoutService({ supabase, normalizePhone, validateOrderC
     return data;
   }
 
+  async function resolveCustomer({ phone, name, telegramUserId = null }) {
+    const normalizedPhone = normalizePhone(phone);
+    if (!normalizedPhone) throw new Error("Invalid verified customer phone");
+    const customerName = String(name || "").trim() || "Гость";
+    const { data: existing, error: findError } = await supabase.from("customers")
+      .select("id,name,normalized_phone,telegram_user_id")
+      .eq("normalized_phone", normalizedPhone)
+      .maybeSingle();
+    if (findError) throw findError;
+    if (existing) {
+      const patch = { name: customerName, updated_at: new Date().toISOString() };
+      if (telegramUserId) patch.telegram_user_id = String(telegramUserId);
+      const { data: updated, error: updateError } = await supabase.from("customers").update(patch).eq("id", existing.id).select("id").single();
+      if (updateError) throw updateError;
+      return updated;
+    }
+    const { data: created, error: createError } = await supabase.from("customers").insert({
+      name: customerName,
+      normalized_phone: normalizedPhone,
+      telegram_user_id: telegramUserId ? String(telegramUserId) : null,
+    }).select("id").single();
+    if (createError) {
+      if (createError.code === "23505") {
+        const { data: raced, error: racedError } = await supabase.from("customers").select("id").eq("normalized_phone", normalizedPhone).single();
+        if (racedError) throw racedError;
+        return raced;
+      }
+      throw createError;
+    }
+    return created;
+  }
+
   async function finalizeByVerificationToken(verificationToken) {
     const verificationHash = hash(verificationToken);
     const { data: session, error } = await supabase.from("checkout_sessions")
@@ -109,6 +141,7 @@ export function createCheckoutService({ supabase, normalizePhone, validateOrderC
     if (!consumed) return { ok: false, reason: "ALREADY_USED" };
 
     const order = session.order_payload || {};
+    const customer = await resolveCustomer({ phone: session.phone, name: order.customerName, telegramUserId: verification.telegram_user_id || null });
     const externalId = `WEB-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
     const trackingToken = randomUUID().replace(/-/g, "");
     const { data: created, error: orderError } = await supabase.from("orders").insert({
@@ -118,6 +151,7 @@ export function createCheckoutService({ supabase, normalizePhone, validateOrderC
       order_type: order.orderType,
       customer_name: order.customerName,
       phone: session.phone,
+      customer_id: customer.id,
       address: order.orderType === "Доставка" ? order.address : null,
       comment: order.comment || null,
       total: Number(order.total || 0),
