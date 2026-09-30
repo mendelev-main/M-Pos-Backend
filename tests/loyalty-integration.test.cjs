@@ -8,3 +8,5 @@ test("refund uses compensating ledger event",()=>{assert.match(server,/operation
 test("ledger is append-oriented and idempotency constrained",()=>{assert.match(server,/loyaltyIdempotencyKey\(orderId,row\.program_id,"reversal"\)/);assert.match(server,/apply_loyalty_sale/);});
 
 test("loyalty programs support future-only rule editing and activation",()=>{assert.match(server,/app\.put\("\/api\/loyalty\/programs\/:id"/);assert.match(server,/loyalty_earning_products"\)\.delete\(\)\.eq\("program_id",id\)/);assert.match(server,/loyalty_reward_products"\)\.delete\(\)\.eq\("program_id",id\)/);assert.match(server,/app\.patch\("\/api\/loyalty\/programs\/:id\/active"/);});
+
+test("customer admin exposes purchase history for retention analytics",()=>{assert.match(server,/\/api\/customers\/:id\/orders/);assert.match(server,/\.eq\("customer_id",req\.params\.id\)/);assert.match(server,/order_items\(product_name,quantity,unit_price\)/);});
