@@ -161,6 +161,72 @@ app.post("/api/menu/sync", async (req, res) => {
   } catch (error) { console.error("POST /api/menu/sync:", error); return res.status(500).json({ error: "Failed to sync menu" }); }
 });
 
+
+const OPERATIONAL_SCHEMA_VERSION = 1;
+const OPERATIONAL_FRESH_MS = Number(process.env.OPERATIONAL_FRESH_MS || 45000);
+async function operationalDevice(req) {
+  const deviceKey = String(req.header("x-device-key") || "").trim();
+  if (!deviceKey) return { error: "Missing device key", status: 401 };
+  const { data: device, error } = await supabase.from("devices").select("id,device_key,name,is_active").eq("device_key", deviceKey).eq("is_active", true).maybeSingle();
+  if (error) throw error;
+  if (!device) return { error: "Invalid device key", status: 401 };
+  return { device };
+}
+function validateOperationalVersion(body) {
+  return Number(body?.schemaVersion) === OPERATIONAL_SCHEMA_VERSION;
+}
+app.post("/api/operational/heartbeat", async (req, res) => {
+  try {
+    const auth = await operationalDevice(req);
+    if (auth.error) return res.status(auth.status).json({ error: auth.error });
+    if (!validateOperationalVersion(req.body)) return res.status(409).json({ error: "Unsupported operational schema version", expected: OPERATIONAL_SCHEMA_VERSION });
+    const receivedAt = new Date().toISOString();
+    const sampledAt = new Date(req.body?.sampledAt || receivedAt);
+    if (Number.isNaN(sampledAt.getTime())) return res.status(400).json({ error: "Invalid sampledAt" });
+    const row = { device_id: auth.device.id, schema_version: OPERATIONAL_SCHEMA_VERSION, engine_version: Number(req.body?.engineVersion) || null, heartbeat_at: receivedAt, updated_at: receivedAt };
+    const { error } = await supabase.from("operational_states").upsert(row, { onConflict: "device_id" });
+    if (error) throw error;
+    return res.json({ ok: true, receivedAt });
+  } catch (error) {
+    console.error("POST /api/operational/heartbeat:", error);
+    return res.status(500).json({ error: "Failed to store operational heartbeat" });
+  }
+});
+app.post("/api/operational/snapshot", async (req, res) => {
+  try {
+    const auth = await operationalDevice(req);
+    if (auth.error) return res.status(auth.status).json({ error: auth.error });
+    if (!validateOperationalVersion(req.body)) return res.status(409).json({ error: "Unsupported operational schema version", expected: OPERATIONAL_SCHEMA_VERSION });
+    if (!req.body?.production || typeof req.body.production !== "object") return res.status(400).json({ error: "Missing production snapshot" });
+    const receivedAt = new Date().toISOString(),sampledAt = new Date(req.body?.sampledAt || receivedAt);
+    if (Number.isNaN(sampledAt.getTime())) return res.status(400).json({ error: "Invalid sampledAt" });
+    const row = { device_id: auth.device.id, schema_version: OPERATIONAL_SCHEMA_VERSION, engine_version: Number(req.body?.engineVersion) || null, heartbeat_at: receivedAt, snapshot_sampled_at: sampledAt.toISOString(), snapshot_received_at: receivedAt, snapshot: req.body, updated_at: receivedAt };
+    const { error } = await supabase.from("operational_states").upsert(row, { onConflict: "device_id" });
+    if (error) throw error;
+    return res.json({ ok: true, receivedAt });
+  } catch (error) {
+    console.error("POST /api/operational/snapshot:", error);
+    return res.status(500).json({ error: "Failed to store operational snapshot" });
+  }
+});
+app.get("/api/operational/state", async (req, res) => {
+  try {
+    const auth = await operationalDevice(req);
+    if (auth.error) return res.status(auth.status).json({ error: auth.error });
+    const { data, error } = await supabase.from("operational_states").select("schema_version,engine_version,heartbeat_at,snapshot_sampled_at,snapshot_received_at,snapshot,updated_at").eq("device_id", auth.device.id).maybeSingle();
+    if (error) throw error;
+    if (!data) return res.json({ available: false, fresh: false, reason: "missing", freshnessMs: null, state: null });
+    const heartbeatAt = data.heartbeat_at ? new Date(data.heartbeat_at).getTime() : 0;
+    const freshnessMs = heartbeatAt ? Math.max(0, Date.now() - heartbeatAt) : null;
+    const compatible = Number(data.schema_version) === OPERATIONAL_SCHEMA_VERSION;
+    const fresh = compatible && freshnessMs !== null && freshnessMs <= OPERATIONAL_FRESH_MS && !!data.snapshot;
+    return res.json({ available: fresh, fresh, compatible, reason: !compatible ? "incompatible" : !data.snapshot ? "missing_snapshot" : freshnessMs > OPERATIONAL_FRESH_MS ? "stale" : null, freshnessMs, maxFreshnessMs: OPERATIONAL_FRESH_MS, state: fresh ? data.snapshot : null });
+  } catch (error) {
+    console.error("GET /api/operational/state:", error);
+    return res.status(500).json({ error: "Failed to read operational state" });
+  }
+});
+
 app.get("/api/menu", async (_req, res) => {
   try {
     const { data: categories, error: categoriesError } = await supabase.from("categories").select("id,name,color,sort_order,is_active,external_id").eq("is_active", true).order("sort_order", { ascending: true }).order("name", { ascending: true });
