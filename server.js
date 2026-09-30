@@ -321,15 +321,18 @@ function etaFromSnapshot(snapshot, work, now=Date.now(), requestedReadyAt=null) 
     const duration=work[station].durationMinutes;
     const requested=Number(requestedReadyAt)||0;
     const desiredStart=requested>now&&duration ? Math.max(now,requested-duration*60000) : now;
-    const queueStart=Math.max(desiredStart,now+currentWait*60000);
+    const queueReadyAt=now+currentWait*60000;
+    const queueStart=Math.max(desiredStart,queueReadyAt);
     const start=duration ? etaFindSlot(queueStart,duration,reservations) : now;
     const wait=duration ? Math.max(0,(start-now)/60000) : 0;
+    const scheduleWait=duration ? Math.max(0,(desiredStart-now)/60000) : 0;
+    const loadWait=duration ? Math.max(0,(start-Math.max(now,desiredStart))/60000) : 0;
     const completion=duration ? wait+duration : 0;
-    stations[station]={waitMinutes:Math.round(wait*100)/100,durationMinutes:duration,completionMinutes:Math.round(completion*100)/100,loadState:etaLoadLevel(wait)};
+    stations[station]={waitMinutes:Math.round(wait*100)/100,scheduleWaitMinutes:Math.round(scheduleWait*100)/100,loadWaitMinutes:Math.round(loadWait*100)/100,durationMinutes:duration,completionMinutes:Math.round(completion*100)/100,loadState:etaLoadLevel(loadWait)};
   }
   const criticalStation=cartStations.length?cartStations.slice().sort((a,b)=>stations[b].completionMinutes-stations[a].completionMinutes)[0]:null;
   const criticalMinutes=criticalStation?stations[criticalStation].completionMinutes:0;
-  const delayingStations=cartStations.filter(st=>stations[st].waitMinutes>0&&stations[st].completionMinutes>=criticalMinutes-ETA_DELAYING_WINDOW_MINUTES);
+  const delayingStations=cartStations.filter(st=>stations[st].loadWaitMinutes>0&&stations[st].completionMinutes>=criticalMinutes-ETA_DELAYING_WINDOW_MINUTES);
   const loadedStations=delayingStations.filter(st=>stations[st].loadState!=="NORMAL").map(st=>({station:st,loadState:stations[st].loadState}));
   const customerLoadState=loadedStations.some(x=>x.loadState==="HIGH")?"HIGH":loadedStations.length?"ELEVATED":"NORMAL";
   const safetyMinutes=criticalMinutes>0?Math.max(2,criticalMinutes*0.10):0;
