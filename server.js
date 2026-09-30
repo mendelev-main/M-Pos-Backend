@@ -275,7 +275,7 @@ async function latestFreshOperationalState() {
     const heartbeatAt = row.heartbeat_at ? new Date(row.heartbeat_at).getTime() : 0;
     const sampledAt = row.snapshot_sampled_at ? new Date(row.snapshot_sampled_at).getTime() : 0;
     const receivedAt = row.snapshot_received_at ? new Date(row.snapshot_received_at).getTime() : 0;
-    const compatible = Number(row.schema_version) === OPERATIONAL_SCHEMA_VERSION && Number(row.engine_version) === ETA_ENGINE_VERSION && Number(row.snapshot?.schemaVersion) === OPERATIONAL_SCHEMA_VERSION && Number(row.snapshot?.engineVersion) === ETA_ENGINE_VERSION;
+    const compatible = Number(row.schema_version) === OPERATIONAL_SCHEMA_VERSION && Number(row.engine_version) === ETA_ENGINE_VERSION && Number(row.snapshot?.schemaVersion) === OPERATIONAL_SCHEMA_VERSION && Number(row.snapshot?.engineVersion) === ETA_ENGINE_VERSION && Number(row.snapshot?.prepCatalog?.version) === 1;
     const heartbeatAge = heartbeatAt ? Math.max(0, now-heartbeatAt) : Infinity;
     const snapshotAge = sampledAt ? now-sampledAt : Infinity;
     const receivedAge = receivedAt ? Math.max(0, now-receivedAt) : Infinity;
@@ -295,7 +295,7 @@ function etaPrepWork(lines, prepByExternalId) {
     const q = Number(qty);
     if (!Number.isFinite(q) || q <= 0 || q > 99) throw new Error("INVALID_QTY");
     result[station].durationMinutes += Math.max(1,Number(prep.basePrepMinutes)||1) * etaBatchFactor(q);
-    result[station].workPoints += q * Math.max(1,Math.min(5,Number(prep.difficulty)||1));
+    result[station].workPoints += q * etaDifficultyMultiplier(prep.difficulty);
   };
   for (const line of lines) {
     add(line.externalId, line.qty);
@@ -307,7 +307,7 @@ function etaPrepWork(lines, prepByExternalId) {
   }
   return result;
 }
-function etaFromSnapshot(snapshot, work, now=Date.now()) {
+function etaFromSnapshot(snapshot, work, now=Date.now(), requestedReadyAt=null) {
   const stations={}, cartStations=ETA_STATIONS.filter(st=>work[st].durationMinutes>0);
   for (const station of ETA_STATIONS) {
     const currentWait=Math.max(0,Number(snapshot?.production?.stations?.[station]?.waitMinutes)||0);
@@ -316,7 +316,10 @@ function etaFromSnapshot(snapshot, work, now=Date.now()) {
       return duration&&ready ? {startAt:ready-duration*60000,endAt:ready} : null;
     }).filter(Boolean);
     const duration=work[station].durationMinutes;
-    const start=duration ? etaFindSlot(now+currentWait*60000,duration,reservations) : now;
+    const requested=Number(requestedReadyAt)||0;
+    const desiredStart=requested>now&&duration ? Math.max(now,requested-duration*60000) : now;
+    const queueStart=Math.max(desiredStart,now+currentWait*60000);
+    const start=duration ? etaFindSlot(queueStart,duration,reservations) : now;
     const wait=duration ? Math.max(0,(start-now)/60000) : 0;
     const completion=duration ? wait+duration : 0;
     stations[station]={waitMinutes:Math.round(wait*100)/100,durationMinutes:duration,completionMinutes:Math.round(completion*100)/100,loadState:etaLoadLevel(wait)};
@@ -351,7 +354,10 @@ app.post("/api/eta/estimate", async (req, res) => {
     const prepByExternalId=new Map(snapshot.prepCatalog.items.map(x=>[String(x.productId),x.prep]));
     const lines=rawItems.map(item=>({externalId:externalById.get(String(item.productId)),qty:Number(item.qty??item.quantity),modifiers:(Array.isArray(item.modifiers)?item.modifiers:[]).map(m=>({externalId:externalById.get(String(m.productId)),qty:Number(m.qty??m.quantity)}))}));
     let work; try{work=etaPrepWork(lines,prepByExternalId);}catch(e){if(["PREP_MISSING","PREP_INCOMPATIBLE"].includes(e.message))return res.json(etaUnavailable());return res.status(400).json({error:"Invalid cart"});}
-    const estimate=etaFromSnapshot(snapshot,work,Date.now());
+    const requestedRaw=req.body?.requestedReadyAt;
+    const requestedReadyAt=requestedRaw?new Date(requestedRaw).getTime():null;
+    if(requestedRaw && (!Number.isFinite(requestedReadyAt)||requestedReadyAt<=Date.now())) return res.status(400).json({error:"Invalid requestedReadyAt"});
+    const estimate=etaFromSnapshot(snapshot,work,Date.now(),requestedReadyAt);
     if(!estimate.criticalStation)return res.json({available:true,minMinutes:0,maxMinutes:0,customerLoadState:"NORMAL",criticalStation:null,loadedStations:[],waitIncreasedByLoad:false,calculatedAt:new Date().toISOString(),validForSeconds:ETA_VALID_FOR_SECONDS,engineVersion:ETA_ENGINE_VERSION});
     return res.json({available:true,minMinutes:estimate.minMinutes,maxMinutes:estimate.maxMinutes,customerLoadState:estimate.customerLoadState,criticalStation:estimate.criticalStation,loadedStations:estimate.loadedStations,waitIncreasedByLoad:estimate.waitIncreasedByLoad,calculatedAt:new Date().toISOString(),validForSeconds:ETA_VALID_FOR_SECONDS,engineVersion:ETA_ENGINE_VERSION});
   } catch(error) {
