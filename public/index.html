@@ -52,7 +52,7 @@ body:before{background:radial-gradient(circle at 18% -8%,rgba(255,255,255,.055),
 <div id="toast" class="toast"></div>
 <script src="/order-validation.js"></script>
 <script>
-const API=location.origin;let menu={categories:[],products:[]};let cart=[];let activeCat=null;let orderType='Самовывоз';let etaTimer=null,etaController=null,etaSeq=0;let trackingToken=localStorage.getItem('prilavok_tracking_token')||'';let trackingTimer=null;let trackingOrder=null;
+const API=location.origin;let menu={categories:[],products:[]};let cart=[];let activeCat=null;let orderType='Самовывоз';let etaTimer=null,etaRefreshTimer=null,etaController=null,etaSeq=0;const ETA_REFRESH_MS=25000;let trackingToken=localStorage.getItem('prilavok_tracking_token')||'';let trackingTimer=null;let trackingOrder=null;
 const money=n=>Number(n||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})+' BYN';
 async function loadMenu(){try{const r=await fetch(API+'/api/menu');if(!r.ok)throw 0;menu=await r.json();renderCats();renderProducts()}catch(e){document.getElementById('grid').innerHTML='<div class="empty" style="grid-column:1/-1">Не удалось загрузить меню.<br>Попробуйте обновить страницу.</div>'}}
 function orderedCategories(){const priority=['пицца','горячее','салаты','закуски','сеты','десерты','холодные напитки','горячие напитки'];return [...menu.categories].sort((a,b)=>{const ai=priority.indexOf(String(a.name||'').trim().toLocaleLowerCase('ru-RU')),bi=priority.indexOf(String(b.name||'').trim().toLocaleLowerCase('ru-RU'));if(ai>=0&&bi>=0)return ai-bi;if(ai>=0)return-1;if(bi>=0)return 1;return 0})}
@@ -81,14 +81,20 @@ function renderEta(data){
   let note='';if(data.customerLoadState==='HIGH'&&who){note=loaded.length>1?'Сейчас высокая загрузка кухни и бара. Время ожидания увеличено':loaded[0]?.station==='kitchen'?'Кухня сейчас сильно загружена. Время ожидания увеличено':'Бар сейчас сильно загружен. Время ожидания увеличено'}else if(data.customerLoadState==='ELEVATED'&&who)note='Сейчас повышенная загрузка '+who;
   if(note)el.classList.add('is-busy');el.innerHTML='<div class="eta-title">Примерное время приготовления</div><div class="eta-time">'+esc(range)+'</div>'+(note?'<div class="eta-note">'+esc(note)+'</div>':'');
 }
-function scheduleEta(){
-  clearTimeout(etaTimer);etaController?.abort();etaController=null;etaSeq++;
+function armEtaRefresh(){
+  clearTimeout(etaRefreshTimer);etaRefreshTimer=null;
+  if(!cart.length||document.hidden||document.getElementById('cartModal')?.style.display!=='flex')return;
+  etaRefreshTimer=setTimeout(()=>scheduleEta({quiet:true}),ETA_REFRESH_MS);
+}
+function scheduleEta({quiet=false}={}){
+  clearTimeout(etaTimer);clearTimeout(etaRefreshTimer);etaRefreshTimer=null;etaController?.abort();etaController=null;etaSeq++;
   if(!cart.length){window.__ETA_LAST=null;renderEta(null);return}
   if(document.getElementById('cartModal')?.style.display!=='flex')return;
-  const seq=etaSeq;renderEta(undefined);
-  etaTimer=setTimeout(async()=>{etaController=new AbortController();try{const r=await fetch(API+'/api/eta/estimate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:cart.map(x=>({productId:x.id,quantity:x.qty}))}),cache:'no-store',signal:etaController.signal});const d=await r.json();if(seq!==etaSeq)return;if(!r.ok)throw new Error(d?.error||'ETA error');renderEta(d)}catch(e){if(e?.name!=='AbortError'&&seq===etaSeq)renderEta({available:false})}finally{if(seq===etaSeq)etaController=null}},220);
+  const seq=etaSeq;if(!quiet)renderEta(undefined);
+  etaTimer=setTimeout(async()=>{etaController=new AbortController();try{const r=await fetch(API+'/api/eta/estimate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:cart.map(x=>({productId:x.id,quantity:x.qty}))}),cache:'no-store',signal:etaController.signal});const d=await r.json();if(seq!==etaSeq)return;if(!r.ok)throw new Error(d?.error||'ETA error');renderEta(d)}catch(e){if(e?.name!=='AbortError'&&seq===etaSeq)renderEta({available:false})}finally{if(seq===etaSeq){etaController=null;armEtaRefresh()}}},quiet?0:220);
 }
-function openCart(){const m=document.getElementById('cartModal');m.style.display='flex';document.body.style.overflow='hidden';window.__ETA_LAST=undefined;renderCart();scheduleEta()}function closeCart(){etaSeq++;clearTimeout(etaTimer);etaController?.abort();etaController=null;const m=document.getElementById('cartModal');m.style.display='none';document.body.style.overflow='';const sh=m.querySelector('.sheet');if(sh){sh.style.transition='';sh.style.transform=''}}
+function openCart(){const m=document.getElementById('cartModal');m.style.display='flex';document.body.style.overflow='hidden';window.__ETA_LAST=undefined;renderCart();scheduleEta()}function closeCart(){etaSeq++;clearTimeout(etaTimer);clearTimeout(etaRefreshTimer);etaRefreshTimer=null;etaController?.abort();etaController=null;const m=document.getElementById('cartModal');m.style.display='none';document.body.style.overflow='';const sh=m.querySelector('.sheet');if(sh){sh.style.transition='';sh.style.transform=''}}
+document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(etaRefreshTimer);etaRefreshTimer=null}else if(document.getElementById('cartModal')?.style.display==='flex'&&cart.length)scheduleEta({quiet:true})});
 let cartDragStartY=0,cartDragY=0,cartDragging=false,cartDragPointer=null;
 (function setupCartDrag(){const m=document.getElementById('cartModal'),sh=m?.querySelector('.sheet'),h=m?.querySelector('.handle');if(!m||!sh||!h)return;
 const move=y=>{if(!cartDragging)return;cartDragY=Math.max(0,y-cartDragStartY);sh.style.transform=`translateY(${cartDragY}px)`;m.style.background=`rgba(0,0,0,${Math.max(.08,.42-cartDragY/650)})`};
