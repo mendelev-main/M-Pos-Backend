@@ -255,17 +255,20 @@ async function latestFreshOperationalState() {
   return { available:false, reason:(rows || []).length ? "stale_or_incompatible" : "missing" };
 }
 
-app.post("/api/eta/estimate", async (_req, res) => {
+async function demandStatusResponse(res) {
   try {
     const stateResult=await latestFreshOperationalState();
     if (!stateResult.available) return res.json({available:false,demandState:"UNAVAILABLE"});
     const overload=stateResult.state?.demand?.overload===true;
     return res.json({available:true,demandState:overload?"OVERLOAD":"NORMAL",overload,calculatedAt:new Date().toISOString(),validForSeconds:DEMAND_STATUS_VALID_FOR_SECONDS});
   } catch(error) {
-    console.error("POST /api/eta/estimate:",error);
+    console.error("Demand status:",error);
     return res.json({available:false,demandState:"UNAVAILABLE"});
   }
-});
+}
+app.get("/api/demand/status", async (_req,res) => demandStatusResponse(res));
+// Temporary compatibility route for already cached/older web clients. It performs no ETA calculation.
+app.post("/api/eta/estimate", async (_req,res) => demandStatusResponse(res));
 
 app.get("/api/menu", async (_req, res) => {
   try {
