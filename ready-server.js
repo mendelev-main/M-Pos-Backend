@@ -64,6 +64,18 @@ async function sendOrderTelegramStatus(orderId, status, externalId, estimateLabe
   }
 }
 
+async function sendCustomerTelegram(chatId,text) {
+  if (!telegramBotToken || !chatId || !text) return false;
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chat_id: String(chatId), text, disable_web_page_preview: true }),
+    });
+    if (!response.ok) throw new Error(`Telegram ${response.status}: ${await response.text()}`);
+    return true;
+  } catch (error) { console.error("Telegram loyalty notification:", error); return false; }
+}
+
 // Customer tracking has exactly three public stages:
 // new -> Заказ создан, accepted -> Заказ подтвержден, ready -> Заказ готов.
 runningApp.get("/", async (_req, res) => {
@@ -85,6 +97,22 @@ runningApp.get("/", async (_req, res) => {
 
 const stack = runningApp.router?.stack;
 if (Array.isArray(stack)) {
+  const loyaltyLayer = stack.find(layer => layer.route?.path === "/api/loyalty/sales" && layer.route?.methods?.post);
+  const loyaltyHandler = loyaltyLayer?.route?.stack?.[0]?.handle;
+  if (loyaltyHandler) {
+    loyaltyLayer.route.stack[0].handle = async (req, res, next) => {
+      const originalJson = res.json.bind(res);
+      res.json = body => {
+        const freshEvents = Array.isArray(body?.events) ? body.events.filter(event => !event.duplicate) : [];
+        if (body?.ok && freshEvents.length && body?.telegramUserId && body?.loyaltyMessage) {
+          void sendCustomerTelegram(body.telegramUserId, body.loyaltyMessage);
+        }
+        return originalJson(body);
+      };
+      return loyaltyHandler(req, res, next);
+    };
+  }
+
   const acceptLayer = stack.find(layer => layer.route?.path === "/api/orders/:id/accept" && layer.route?.methods?.post);
   const acceptHandler = acceptLayer?.route?.stack?.[0]?.handle;
   if (acceptHandler) {
