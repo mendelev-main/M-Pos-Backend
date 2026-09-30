@@ -174,7 +174,7 @@ export function createCheckoutService({ supabase, normalizePhone, validateOrderC
     }).eq("id", session.id);
     if (updateError) throw updateError;
 
-    return { ok: true, orderId: created.id };
+    return { ok: true, orderId: created.id, customerId: customer.id };
   }
 
   return { create, get, finalizeByVerificationToken };
