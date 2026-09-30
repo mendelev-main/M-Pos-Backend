@@ -198,12 +198,12 @@ app.post("/api/operational/snapshot", async (req, res) => {
     if (auth.error) return res.status(auth.status).json({ error: auth.error });
     if (!validateOperationalVersion(req.body)) return res.status(409).json({ error: "Unsupported operational schema version", expected: OPERATIONAL_SCHEMA_VERSION });
     if (!req.body?.production || typeof req.body.production !== "object") return res.status(400).json({ error: "Missing production snapshot" });
-    const receivedAt = new Date().toISOString(),sampledAt = new Date(req.body?.sampledAt || receivedAt);
+    const receivedAt = new Date().toISOString(),sampledAt = new Date(req.body?.sampledAt || receivedAt),revision=Number(req.body?.revision);
     if (Number.isNaN(sampledAt.getTime())) return res.status(400).json({ error: "Invalid sampledAt" });
-    const row = { device_id: auth.device.id, schema_version: OPERATIONAL_SCHEMA_VERSION, engine_version: Number(req.body?.engineVersion) || null, heartbeat_at: receivedAt, snapshot_sampled_at: sampledAt.toISOString(), snapshot_received_at: receivedAt, snapshot: req.body, updated_at: receivedAt };
-    const { error } = await supabase.from("operational_states").upsert(row, { onConflict: "device_id" });
+    if (!Number.isSafeInteger(revision) || revision <= 0) return res.status(400).json({ error: "Invalid snapshot revision" });
+    const { data: applied, error } = await supabase.rpc("store_operational_snapshot",{p_device_id:auth.device.id,p_schema_version:OPERATIONAL_SCHEMA_VERSION,p_engine_version:Number(req.body?.engineVersion)||null,p_revision:revision,p_sampled_at:sampledAt.toISOString(),p_received_at:receivedAt,p_snapshot:req.body});
     if (error) throw error;
-    return res.json({ ok: true, receivedAt });
+    return res.json({ ok: true, applied: applied===true, ignoredAsStale: applied!==true, revision, receivedAt });
   } catch (error) {
     console.error("POST /api/operational/snapshot:", error);
     return res.status(500).json({ error: "Failed to store operational snapshot" });
@@ -213,7 +213,7 @@ app.get("/api/operational/state", async (req, res) => {
   try {
     const auth = await operationalDevice(req);
     if (auth.error) return res.status(auth.status).json({ error: auth.error });
-    const { data, error } = await supabase.from("operational_states").select("schema_version,engine_version,heartbeat_at,snapshot_sampled_at,snapshot_received_at,snapshot,updated_at").eq("device_id", auth.device.id).maybeSingle();
+    const { data, error } = await supabase.from("operational_states").select("schema_version,engine_version,heartbeat_at,snapshot_sampled_at,snapshot_received_at,snapshot_revision,snapshot,updated_at").eq("device_id", auth.device.id).maybeSingle();
     if (error) throw error;
     if (!data) return res.json({ available: false, fresh: false, reason: "missing", freshnessMs: null, state: null });
     const now=Date.now(),heartbeatAt=data.heartbeat_at?new Date(data.heartbeat_at).getTime():0,sampledAt=data.snapshot_sampled_at?new Date(data.snapshot_sampled_at).getTime():0,receivedAt=data.snapshot_received_at?new Date(data.snapshot_received_at).getTime():0;
