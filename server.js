@@ -312,7 +312,7 @@ function etaPrepWork(lines, prepByExternalId) {
 function etaFromSnapshot(snapshot, work, now=Date.now(), requestedReadyAt=null) {
   const stations={}, cartStations=ETA_STATIONS.filter(st=>work[st].durationMinutes>0);
   for (const station of ETA_STATIONS) {
-    const currentWait=Math.max(0,Number(snapshot?.production?.stations?.[station]?.waitMinutes)||0);
+    const currentWait=Math.max(0,Number(snapshot?.production?.currentQueueMinutes?.[station])||0);
     const reservations=(snapshot?.scheduled||[]).map(o=>{
       const duration=Math.max(0,Number(o?.work?.[station]?.durationMinutes)||0),ready=Number(o?.requestedReadyAt)||0;
       return duration&&ready ? {startAt:ready-duration*60000,endAt:ready} : null;
