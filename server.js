@@ -216,11 +216,13 @@ app.get("/api/operational/state", async (req, res) => {
     const { data, error } = await supabase.from("operational_states").select("schema_version,engine_version,heartbeat_at,snapshot_sampled_at,snapshot_received_at,snapshot,updated_at").eq("device_id", auth.device.id).maybeSingle();
     if (error) throw error;
     if (!data) return res.json({ available: false, fresh: false, reason: "missing", freshnessMs: null, state: null });
-    const heartbeatAt = data.heartbeat_at ? new Date(data.heartbeat_at).getTime() : 0;
-    const freshnessMs = heartbeatAt ? Math.max(0, Date.now() - heartbeatAt) : null;
-    const compatible = Number(data.schema_version) === OPERATIONAL_SCHEMA_VERSION;
-    const fresh = compatible && freshnessMs !== null && freshnessMs <= OPERATIONAL_FRESH_MS && !!data.snapshot;
-    return res.json({ available: fresh, fresh, compatible, reason: !compatible ? "incompatible" : !data.snapshot ? "missing_snapshot" : freshnessMs > OPERATIONAL_FRESH_MS ? "stale" : null, freshnessMs, maxFreshnessMs: OPERATIONAL_FRESH_MS, state: fresh ? data.snapshot : null });
+    const now=Date.now(),heartbeatAt=data.heartbeat_at?new Date(data.heartbeat_at).getTime():0,sampledAt=data.snapshot_sampled_at?new Date(data.snapshot_sampled_at).getTime():0,receivedAt=data.snapshot_received_at?new Date(data.snapshot_received_at).getTime():0;
+    const freshnessMs=heartbeatAt?Math.max(0,now-heartbeatAt):null,snapshotAgeMs=sampledAt?now-sampledAt:null,snapshotReceivedAgeMs=receivedAt?Math.max(0,now-receivedAt):null;
+    const compatible=Number(data.schema_version)===OPERATIONAL_SCHEMA_VERSION&&Number(data.engine_version)===ETA_ENGINE_VERSION&&Number(data.snapshot?.schemaVersion)===OPERATIONAL_SCHEMA_VERSION&&Number(data.snapshot?.engineVersion)===ETA_ENGINE_VERSION;
+    const clockValid=snapshotAgeMs!==null&&snapshotAgeMs>=-30000;
+    const fresh=compatible&&!!data.snapshot&&freshnessMs!==null&&freshnessMs<=OPERATIONAL_FRESH_MS&&clockValid&&snapshotAgeMs<=OPERATIONAL_FRESH_MS&&snapshotReceivedAgeMs!==null&&snapshotReceivedAgeMs<=OPERATIONAL_FRESH_MS;
+    const reason=!compatible?"incompatible":!data.snapshot?"missing_snapshot":!clockValid?"invalid_snapshot_clock":!fresh?"stale":null;
+    return res.json({available:fresh,fresh,compatible,reason,freshnessMs,snapshotAgeMs,snapshotReceivedAgeMs,maxFreshnessMs:OPERATIONAL_FRESH_MS,state:fresh?data.snapshot:null});
   } catch (error) {
     console.error("GET /api/operational/state:", error);
     return res.status(500).json({ error: "Failed to read operational state" });
