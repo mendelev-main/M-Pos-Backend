@@ -5,7 +5,7 @@ test("loyalty uses existing backend Telegram transport",()=>{assert.match(ready,
 test("duplicate loyalty retries do not notify Telegram twice",()=>{assert.match(ready,/filter\(event => !event\.duplicate\)/);assert.match(server,/apply_loyalty_sale/);assert.match(server,/duplicate:Boolean\(x\?\.duplicate\)/);});
 test("manual adjustment requires reason and administrator identity",()=>{assert.match(server,/reason, administrator and adjustment are required/);assert.match(server,/adminEmployeeId/);assert.match(server,/adminEmployeeName/);assert.match(server,/operation_type:"MANUAL_ADJUSTMENT"/);});
 test("refund uses compensating ledger event",()=>{assert.match(server,/operation_type:"REVERSAL"/);assert.match(server,/progress_delta:-Number/);assert.match(server,/reward_delta:-Number/);});
-test("ledger is append-oriented and idempotency constrained",()=>{assert.match(server,/loyaltyIdempotencyKey\(orderId,row\.program_id,"reversal"\)/);assert.match(server,/apply_loyalty_sale/);});
+test("ledger is append-oriented and idempotency constrained",()=>{assert.match(server,/loyaltyIdempotencyKey\(orderId,row\.program_id,"reversal:"\+row\.id\)/);assert.match(server,/apply_loyalty_sale/);});
 
 test("loyalty programs support future-only rule editing and activation",()=>{assert.match(server,/app\.put\("\/api\/loyalty\/programs\/:id"/);assert.match(server,/loyalty_earning_products"\)\.delete\(\)\.eq\("program_id",id\)/);assert.match(server,/loyalty_reward_products"\)\.delete\(\)\.eq\("program_id",id\)/);assert.match(server,/app\.patch\("\/api\/loyalty\/programs\/:id\/active"/);});
 
