@@ -435,11 +435,11 @@ app.post("/api/orders", async (req, res) => {
 
     const fee = orderType === "Доставка" ? (Number.isFinite(deliveryFee) ? deliveryFee : 0) : 0; const total = subtotal + fee;
     const externalId = `WEB-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`; const trackingToken = randomUUID().replace(/-/g, "");
-    const { data: order, error: orderError } = await supabase.from("orders").insert({ external_id: externalId, tracking_token: trackingToken, status: "new", order_type: orderType, customer_name: customerName, phone, address: orderType === "Доставка" ? address : null, comment: comment || null, total, delivery_fee: fee }).select("*").single();
+    const { data: order, error: orderError } = await supabase.rpc("create_web_order",{p_external_id:externalId,p_tracking_token:trackingToken,p_order_type:orderType,p_customer_name:customerName,p_phone:phone,p_address:orderType==="Доставка"?address:null,p_comment:comment||null,p_total:total,p_delivery_fee:fee,p_items:items});
     if (orderError) throw orderError;
-    const { error: itemError } = await supabase.from("order_items").insert(items.map(item => ({ ...item, order_id: order.id })));
-    if (itemError) throw itemError;
-    res.status(201).json({ ok: true, orderId: order.id, externalId, trackingToken, total, deliveryFee: fee });
+    const created=Array.isArray(order)?order[0]:order;
+    if(!created?.id)throw new Error("Atomic order creation returned no order");
+    res.status(201).json({ ok: true, orderId: created.id, externalId, trackingToken, total, deliveryFee: fee });
   } catch (error) { console.error("POST /api/orders:", error); res.status(500).json({ error: "Не удалось создать заказ" }); }
 });
 
