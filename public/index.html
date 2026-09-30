@@ -69,18 +69,20 @@ function updateProductCard(id){const card=document.querySelector(`.product[data-
 function animateCartAdd(d){if(d<=0)return;const b=document.querySelector('.cartbtn');if(!b)return;b.classList.remove('cart-pulse');void b.offsetWidth;b.classList.add('cart-pulse')}
 function updateCart(){const count=cart.reduce((s,x)=>s+x.qty,0);const subtotal=cart.reduce((s,x)=>s+(menu.products.find(p=>p.id===x.id)?.price||0)*x.qty,0);document.getElementById('cartCount').textContent=count;document.getElementById('cartTotal').textContent=money(subtotal);const bar=document.getElementById('cartbar');bar.style.display=count?'block':'none';bar.classList.toggle('is-visible',!!count);if(document.getElementById('cartModal').style.display==='flex')renderCart();scheduleEta()}
 function renderCart(){const el=document.getElementById('cartItems');el.innerHTML=cart.map(x=>{const p=menu.products.find(p=>p.id===x.id);return `<div class="row"><div class="itemmain"><div class="itemname">${esc(p.name)}</div><div class="itemsub">${money(p.price)} × ${x.qty}</div></div><div class="actions"><button onclick="changeQty('${p.id}',-1)">−</button><b>${x.qty}</b><button onclick="changeQty('${p.id}',1)">+</button></div></div>`}).join('');const subtotal=cart.reduce((s,x)=>s+(menu.products.find(p=>p.id===x.id)?.price||0)*x.qty,0);const fee=orderType==='Доставка'?getDeliveryFee():0;document.getElementById('checkoutTotal').textContent=money(subtotal+fee);document.getElementById('deliveryFeeText').textContent=money(fee);renderEta(window.__ETA_LAST);scheduleEta()}
-function etaStationText(stations){const names=stations.map(x=>x.station==='kitchen'?'кухни':'бара');return names.length>1?'кухни и бара':names[0]||''}
 function renderEta(data){
   window.__ETA_LAST=data;const el=document.getElementById('etaCard');if(!el)return;
   el.className='eta-card';
   if(!cart.length){el.style.display='none';return}el.style.display='block';
-  if(data===undefined){el.classList.add('is-loading');el.innerHTML='<div class="eta-title">Примерное время приготовления</div><div class="eta-time">Рассчитываем…</div>';return}
-  if(!data?.available){el.classList.add('is-unavailable');el.innerHTML='<div class="eta-title">Примерное время приготовления</div><div class="eta-time">Не смогли рассчитать примерное время приготовления</div>';return}
-  const range=data.maxMinutes==null?('от '+data.minMinutes+' мин'):data.minMinutes===data.maxMinutes?(data.minMinutes+' мин'):(data.minMinutes+'–'+data.maxMinutes+' мин');
-  const loaded=Array.isArray(data.loadedStations)?data.loadedStations:[],who=etaStationText(loaded);
-  let note='';if(data.customerLoadState==='HIGH'&&who){note=loaded.length>1?'Сейчас высокая загрузка кухни и бара. Время ожидания увеличено':loaded[0]?.station==='kitchen'?'Кухня сейчас сильно загружена. Время ожидания увеличено':'Бар сейчас сильно загружен. Время ожидания увеличено'}else if(data.customerLoadState==='ELEVATED'&&who)note='Сейчас повышенная загрузка '+who;
-  if(note)el.classList.add('is-busy');el.innerHTML='<div class="eta-title">Примерное время приготовления</div><div class="eta-time">'+esc(range)+'</div>'+(note?'<div class="eta-note">'+esc(note)+'</div>':'');
+  if(data===undefined){el.classList.add('is-loading');el.innerHTML='<div class="eta-title">Загрузка</div><div class="eta-time">Проверяем…</div>';return}
+  if(!data?.available){el.classList.add('is-unavailable');el.innerHTML='<div class="eta-title">Загрузка</div><div class="eta-time">Статус загрузки временно недоступен</div>';return}
+  if(data.overload===true||data.demandState==='OVERLOAD'){
+    el.classList.add('is-busy');
+    el.innerHTML='<div class="eta-title">Повышенный спрос</div><div class="eta-time">Время приготовления заказа увеличено</div>';
+    return;
+  }
+  el.innerHTML='<div class="eta-title">Загрузка</div><div class="eta-time">Обычная загрузка</div>';
 }
+
 function armEtaRefresh(){
   clearTimeout(etaRefreshTimer);etaRefreshTimer=null;
   if(!cart.length||document.hidden||document.getElementById('cartModal')?.style.display!=='flex')return;
