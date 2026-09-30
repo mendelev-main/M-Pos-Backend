@@ -18,3 +18,6 @@ comment on table public.operational_states is
   'Latest coalesced POS production heartbeat/snapshot used for ETA freshness.';
 
 alter table public.operational_states enable row level security;
+
+-- Backend uses supabase-js with the service role through the Data API.
+grant select, insert, update, delete on public.operational_states to service_role;
