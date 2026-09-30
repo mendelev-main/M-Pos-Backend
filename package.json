@@ -5,8 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node ready-server.js",
-    "test": "node --test tests/*.test.mjs tests/*.test.cjs",
-    "prestart": "npm test"
+    "test": "node --test tests/*.test.mjs tests/*.test.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.117.1",
@@ -15,5 +14,9 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8"
-  }
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "packageManager": "npm@10.9.3"
 }
