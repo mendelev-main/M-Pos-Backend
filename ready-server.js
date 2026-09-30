@@ -25,7 +25,7 @@ function shortOrderNumber(externalId) {
 
 const orderStatusMessages = {
   new: externalId => `<b>Заказ №${shortOrderNumber(externalId)}</b>\n⚪️ Статус: <b>Создан</b>\n\nОтправили ваш заказ в заведение. Сообщим, когда его статус изменится.`,
-  accepted: externalId => `<b>Заказ №${shortOrderNumber(externalId)}</b>\n🟡 Статус: <b>Подтвержден</b>\n\nМы подтвердили получение вашего заказа. Когда заказ будет готов, вам придёт уведомление.`,
+  accepted: (externalId, estimateLabel="") => `<b>Заказ №${shortOrderNumber(externalId)}</b>\n🟡 Статус: <b>Заказ взят в работу</b>${estimateLabel?`\n⏱ Примерное время ожидания: <b>${estimateLabel}</b>`:''}\n\nКогда заказ будет готов, вам придёт уведомление.`,
   ready: externalId => `<b>Заказ №${shortOrderNumber(externalId)}</b>\n🟢 Статус: <b>Готов</b>\n\nВаш заказ готов. Спасибо, что выбираете нас ❤️`,
 };
 
@@ -41,7 +41,7 @@ async function telegramRecipientForOrder(orderId) {
   return data?.telegram_user_id ? String(data.telegram_user_id) : null;
 }
 
-async function sendOrderTelegramStatus(orderId, status, externalId) {
+async function sendOrderTelegramStatus(orderId, status, externalId, estimateLabel="") {
   if (!telegramBotToken || !orderStatusMessages[status]) return false;
   try {
     const chatId = await telegramRecipientForOrder(orderId);
@@ -51,7 +51,7 @@ async function sendOrderTelegramStatus(orderId, status, externalId) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text: orderStatusMessages[status](externalId),
+        text: orderStatusMessages[status](externalId, estimateLabel),
         parse_mode: "HTML",
         disable_web_page_preview: true,
       }),
@@ -85,6 +85,24 @@ runningApp.get("/", async (_req, res) => {
 
 const stack = runningApp.router?.stack;
 if (Array.isArray(stack)) {
+  const acceptLayer = stack.find(layer => layer.route?.path === "/api/orders/:id/accept" && layer.route?.methods?.post);
+  const acceptHandler = acceptLayer?.route?.stack?.[0]?.handle;
+  if (acceptHandler) {
+    acceptLayer.route.stack[0].handle = async (req, res, next) => {
+      const estimate = String(req.body?.readyEstimate || "").trim();
+      const estimateLabel = manualReadyEstimateLabels.get(estimate);
+      if (!estimateLabel) return res.status(400).json({ error: "Выберите примерное время готовности" });
+      const originalJson = res.json.bind(res);
+      res.json = body => {
+        if (body?.ok && body?.order?.id) {
+          void sendOrderTelegramStatus(body.order.id, "accepted", body.order.external_id, estimateLabel);
+        }
+        return originalJson(body);
+      };
+      return acceptHandler(req, res, next);
+    };
+  }
+
   const index = stack.findIndex(layer => layer.route?.path === "/" && layer.route?.methods?.get);
   if (index >= 0) {
     const [rootLayer] = stack.splice(index, 1);
@@ -93,53 +111,8 @@ if (Array.isArray(stack)) {
 }
 
 const manualReadyEstimateLabels = new Map([
-  ["5m", "5 минут"],
-  ["15m", "15 минут"],
-  ["30m", "30 минут"],
-  ["40m", "40 минут"],
-  ["60plus", "больше часа"],
+  ["5m", "5 минут"], ["15m", "15 минут"], ["30m", "30 минут"], ["40m", "40 минут"], ["60plus", "больше часа"],
 ]);
-
-runningApp.post("/api/orders/:id/ready-estimate", async (req, res) => {
-  try {
-    const deviceKey = String(req.header("x-device-key") || req.body?.deviceKey || "").trim();
-    const id = String(req.params.id || "").trim();
-    const estimate = String(req.body?.estimate || "").trim();
-    if (!deviceKey) return res.status(401).json({ error: "Missing device key" });
-    if (!id) return res.status(400).json({ error: "Invalid order id" });
-    const label = manualReadyEstimateLabels.get(estimate);
-    if (!label) return res.status(400).json({ error: "Некорректное ориентировочное время" });
-
-    const { data: device, error: deviceError } = await supabase.from("devices").select("id").eq("device_key", deviceKey).eq("is_active", true).maybeSingle();
-    if (deviceError) throw deviceError;
-    if (!device) return res.status(401).json({ error: "Invalid device key" });
-
-    const { data: order, error: orderError } = await supabase.from("orders").select("id,status,external_id").eq("id", id).maybeSingle();
-    if (orderError) throw orderError;
-    if (!order) return res.status(404).json({ error: "Заказ не найден" });
-    if (order.status !== "accepted") return res.status(409).json({ error: "Сначала заказ должен быть взят в работу", order });
-
-    const chatId = await telegramRecipientForOrder(order.id);
-    if (!chatId) return res.status(409).json({ error: "Для заказа не найден Telegram получателя" });
-    if (!telegramBotToken) return res.status(503).json({ error: "Telegram уведомления временно недоступны" });
-
-    const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: `<b>Заказ №${shortOrderNumber(order.external_id)}</b>\n⏱ Примерное время готовности: <b>${label}</b>\n\nЭто ориентировочное время — мы сообщим отдельно, когда заказ будет готов.`,
-        parse_mode: "HTML",
-        disable_web_page_preview: true,
-      }),
-    });
-    if (!response.ok) throw new Error(`Telegram ${response.status}: ${await response.text()}`);
-    return res.json({ ok: true, estimate, label });
-  } catch (error) {
-    console.error("POST /api/orders/:id/ready-estimate:", error);
-    return res.status(500).json({ error: "Не удалось отправить ориентировочное время" });
-  }
-});
 
 runningApp.post("/api/orders/:id/ready", async (req, res) => {
   try {
@@ -181,7 +154,7 @@ async function notifyNewAndAcceptedOrders() {
     for (const session of sessions || []) {
       const order = session.orders;
       if (!order?.id) continue;
-      const status = order.status === "new" ? "new" : order.status === "accepted" ? "accepted" : null;
+      const status = order.status === "new" ? "new" : null;
       if (!status) continue;
       const marker = `${status}:${order.id}:${order.updated_at || order.created_at || ''}`;
       if (notifyNewAndAcceptedOrders.sent.has(marker)) continue;
