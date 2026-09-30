@@ -247,9 +247,15 @@ async function pushNewOrders(){
 setInterval(pushNewOrders, 2000);
 
 app.get("/api/orders/events", async (req, res) => {
-  const deviceKey = String(req.header("x-device-key") || req.query.deviceKey || "").trim(); if(!deviceKey) return res.status(401).json({error:"Missing device key"});
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8"); res.setHeader("Cache-Control", "no-cache, no-transform"); res.setHeader("Connection", "keep-alive"); res.setHeader("X-Accel-Buffering", "no"); res.flushHeaders?.();
-  const client={res,deviceKey}; eventClients.add(client); res.write(`event: ready\ndata: ${JSON.stringify({ok:true})}\n\n`); const heartbeat=setInterval(()=>{ try{res.write(`: ping\n\n`);}catch(e){} }, 15000); req.on("close",()=>{clearInterval(heartbeat);eventClients.delete(client);}); pushNewOrders();
+  try {
+    const deviceKey = String(req.header("x-device-key") || req.query.deviceKey || "").trim();
+    if(!deviceKey) return res.status(401).json({error:"Missing device key"});
+    const { data: device, error } = await supabase.from("devices").select("id").eq("device_key", deviceKey).eq("is_active", true).maybeSingle();
+    if(error) throw error;
+    if(!device) return res.status(401).json({error:"Invalid device key"});
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8"); res.setHeader("Cache-Control", "no-cache, no-transform"); res.setHeader("Connection", "keep-alive"); res.setHeader("X-Accel-Buffering", "no"); res.flushHeaders?.();
+    const client={res,deviceKey,deviceId:device.id}; eventClients.add(client); res.write(`event: ready\ndata: ${JSON.stringify({ok:true})}\n\n`); const heartbeat=setInterval(()=>{ try{res.write(`: ping\n\n`);}catch(e){} }, 15000); req.on("close",()=>{clearInterval(heartbeat);eventClients.delete(client);}); pushNewOrders();
+  } catch(error) { console.error("GET /api/orders/events:", error); if(!res.headersSent) return res.status(500).json({error:"Failed to open order stream"}); res.end(); }
 });
 
 app.get("/api/config", (_req, res) => res.json({ deliveryFee: Number.isFinite(deliveryFee) ? deliveryFee : 0 }));
