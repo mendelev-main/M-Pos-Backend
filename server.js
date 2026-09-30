@@ -277,7 +277,8 @@ async function latestFreshOperationalState() {
     const heartbeatAt = row.heartbeat_at ? new Date(row.heartbeat_at).getTime() : 0;
     const sampledAt = row.snapshot_sampled_at ? new Date(row.snapshot_sampled_at).getTime() : 0;
     const receivedAt = row.snapshot_received_at ? new Date(row.snapshot_received_at).getTime() : 0;
-    const compatible = Number(row.schema_version) === OPERATIONAL_SCHEMA_VERSION && Number(row.engine_version) === ETA_ENGINE_VERSION && Number(row.snapshot?.schemaVersion) === OPERATIONAL_SCHEMA_VERSION && Number(row.snapshot?.engineVersion) === ETA_ENGINE_VERSION && Number(row.snapshot?.prepCatalog?.version) === 1;
+    const queueContract=ETA_STATIONS.every(st=>Number.isFinite(Number(row.snapshot?.production?.currentQueueMinutes?.[st])));
+    const compatible = Number(row.schema_version) === OPERATIONAL_SCHEMA_VERSION && Number(row.engine_version) === ETA_ENGINE_VERSION && Number(row.snapshot?.schemaVersion) === OPERATIONAL_SCHEMA_VERSION && Number(row.snapshot?.engineVersion) === ETA_ENGINE_VERSION && Number(row.snapshot?.prepCatalog?.version) === 1 && queueContract;
     const heartbeatAge = heartbeatAt ? Math.max(0, now-heartbeatAt) : Infinity;
     const snapshotAge = sampledAt ? now-sampledAt : Infinity;
     const receivedAge = receivedAt ? Math.max(0, now-receivedAt) : Infinity;
