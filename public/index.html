@@ -78,7 +78,7 @@ function renderEta(data){
   if(!data?.available){el.classList.add('is-unavailable');el.innerHTML='<div class="eta-title">Примерное время приготовления</div><div class="eta-time">Не смогли рассчитать примерное время приготовления</div>';return}
   const range=data.maxMinutes==null?('от '+data.minMinutes+' мин'):data.minMinutes===data.maxMinutes?(data.minMinutes+' мин'):(data.minMinutes+'–'+data.maxMinutes+' мин');
   const loaded=Array.isArray(data.loadedStations)?data.loadedStations:[],who=etaStationText(loaded);
-  let note='';if(data.customerLoadState==='HIGH'&&who)note='Сейчас высокая загрузка '+who+'. Время ожидания увеличено';else if(data.customerLoadState==='ELEVATED'&&who)note='Сейчас повышенная загрузка '+who;
+  let note='';if(data.customerLoadState==='HIGH'&&who){note=loaded.length>1?'Сейчас высокая загрузка кухни и бара. Время ожидания увеличено':loaded[0]?.station==='kitchen'?'Кухня сейчас сильно загружена. Время ожидания увеличено':'Бар сейчас сильно загружен. Время ожидания увеличено'}else if(data.customerLoadState==='ELEVATED'&&who)note='Сейчас повышенная загрузка '+who;
   if(note)el.classList.add('is-busy');el.innerHTML='<div class="eta-title">Примерное время приготовления</div><div class="eta-time">'+esc(range)+'</div>'+(note?'<div class="eta-note">'+esc(note)+'</div>':'');
 }
 function scheduleEta(){
