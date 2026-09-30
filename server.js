@@ -360,17 +360,17 @@ app.post("/api/orders/:id/accept", async (req, res) => {
     if (deviceError) throw deviceError;
     if (!device) return res.status(401).json({ error: "Invalid device key" });
 
-    const { data: existing, error: existingError } = await supabase.from("orders").select("id,status,updated_at").eq("id", id).maybeSingle();
+    const { data: existing, error: existingError } = await supabase.from("orders").select("id,status,external_id,updated_at").eq("id", id).maybeSingle();
     if (existingError) throw existingError;
     if (!existing) return res.status(404).json({ error: "Заказ не найден" });
 
     if (existing.status === "accepted") return res.json({ ok: true, order: existing, alreadyAccepted: true });
     if (existing.status !== "new") return res.status(409).json({ error: "Заказ уже изменил статус", order: existing });
 
-    const { data: order, error } = await supabase.from("orders").update({ status: "accepted", updated_at: new Date().toISOString() }).eq("id", id).eq("status", "new").select("id,status,updated_at").maybeSingle();
+    const { data: order, error } = await supabase.from("orders").update({ status: "accepted", updated_at: new Date().toISOString() }).eq("id", id).eq("status", "new").select("id,status,external_id,updated_at").maybeSingle();
     if (error) throw error;
     if (!order) {
-      const { data: current, error: currentError } = await supabase.from("orders").select("id,status,updated_at").eq("id", id).maybeSingle();
+      const { data: current, error: currentError } = await supabase.from("orders").select("id,status,external_id,updated_at").eq("id", id).maybeSingle();
       if (currentError) throw currentError;
       if (current?.status === "accepted") return res.json({ ok: true, order: current, alreadyAccepted: true });
       return res.status(409).json({ error: "Заказ уже изменил статус", order: current || null });
