@@ -266,16 +266,21 @@ async function latestFreshOperationalState() {
   if (deviceError) throw deviceError;
   const ids = (devices || []).map(x=>x.id);
   if (!ids.length) return { available:false, reason:"missing" };
+  // v1 has one location/POS identity. Never guess between multiple active devices.
+  if (ids.length !== 1) return { available:false, reason:"ambiguous_location" };
   const { data: rows, error } = await supabase.from("operational_states").select("device_id,schema_version,engine_version,heartbeat_at,snapshot_sampled_at,snapshot_received_at,snapshot").in("device_id", ids).order("heartbeat_at",{ascending:false}).limit(10);
   if (error) throw error;
   const now = Date.now();
   for (const row of (rows || [])) {
     const heartbeatAt = row.heartbeat_at ? new Date(row.heartbeat_at).getTime() : 0;
     const sampledAt = row.snapshot_sampled_at ? new Date(row.snapshot_sampled_at).getTime() : 0;
+    const receivedAt = row.snapshot_received_at ? new Date(row.snapshot_received_at).getTime() : 0;
     const compatible = Number(row.schema_version) === OPERATIONAL_SCHEMA_VERSION && Number(row.engine_version) === ETA_ENGINE_VERSION && Number(row.snapshot?.schemaVersion) === OPERATIONAL_SCHEMA_VERSION && Number(row.snapshot?.engineVersion) === ETA_ENGINE_VERSION;
     const heartbeatAge = heartbeatAt ? Math.max(0, now-heartbeatAt) : Infinity;
-    const snapshotAge = sampledAt ? Math.max(0, now-sampledAt) : Infinity;
-    if (compatible && row.snapshot && heartbeatAge <= OPERATIONAL_FRESH_MS && snapshotAge <= OPERATIONAL_FRESH_MS) return { available:true, state:row.snapshot };
+    const snapshotAge = sampledAt ? now-sampledAt : Infinity;
+    const receivedAge = receivedAt ? Math.max(0, now-receivedAt) : Infinity;
+    const clockValid = Number.isFinite(snapshotAge) && snapshotAge >= -30000;
+    if (compatible && row.snapshot && clockValid && snapshotAge <= OPERATIONAL_FRESH_MS && receivedAge <= OPERATIONAL_FRESH_MS && heartbeatAge <= OPERATIONAL_FRESH_MS) return { available:true, state:row.snapshot };
   }
   return { available:false, reason:(rows || []).length ? "stale_or_incompatible" : "missing" };
 }
