@@ -55,14 +55,13 @@ export function createCheckoutService({ supabase, normalizePhone, validateOrderC
     };
   }
 
-  async function create(payload, returnBaseUrl) {
+  async function create(payload) {
     const prepared = await prepareOrder(payload);
     if (prepared.error) return prepared;
 
     const checkoutToken = randomBytes(32).toString("base64url");
     const expiresAt = new Date(Date.now() + CHECKOUT_TTL_MS).toISOString();
-    const returnUrl = `${String(returnBaseUrl || "").replace(/\/+$/, "")}/?checkout=${encodeURIComponent(checkoutToken)}`;
-    const verification = await phoneVerification.create(prepared.order.phone, returnUrl);
+    const verification = await phoneVerification.create(prepared.order.phone);
     if (verification.error) return verification;
 
     const { error } = await supabase.from("checkout_sessions").insert({
@@ -100,7 +99,7 @@ export function createCheckoutService({ supabase, normalizePhone, validateOrderC
       .maybeSingle();
     if (error) throw error;
     if (!session) return null;
-    if (session.status === "ORDER_CREATED") return { ok: true, trackingToken: session.tracking_token, orderId: session.order_id };
+    if (session.status === "ORDER_CREATED") return { ok: true, orderId: session.order_id };
     if (session.status !== "PENDING" || new Date(session.expires_at).getTime() <= Date.now()) return { ok: false, reason: "EXPIRED" };
 
     const verification = await phoneVerification.get(verificationToken);
@@ -141,7 +140,7 @@ export function createCheckoutService({ supabase, normalizePhone, validateOrderC
     }).eq("id", session.id);
     if (updateError) throw updateError;
 
-    return { ok: true, orderId: created.id, trackingToken };
+    return { ok: true, orderId: created.id };
   }
 
   return { create, get, finalizeByVerificationToken };
