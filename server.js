@@ -183,7 +183,7 @@ app.post("/api/operational/heartbeat", async (req, res) => {
     const receivedAt = new Date().toISOString();
     const sampledAt = new Date(req.body?.sampledAt || receivedAt);
     if (Number.isNaN(sampledAt.getTime())) return res.status(400).json({ error: "Invalid sampledAt" });
-    const row = { device_id: auth.device.id, schema_version: OPERATIONAL_SCHEMA_VERSION, engine_version: Number(req.body?.engineVersion) || null, heartbeat_at: receivedAt, updated_at: receivedAt };
+    const row = { device_id: auth.device.id, schema_version: OPERATIONAL_SCHEMA_VERSION, engine_version: null, heartbeat_at: receivedAt, updated_at: receivedAt };
     const { error } = await supabase.from("operational_states").upsert(row, { onConflict: "device_id" });
     if (error) throw error;
     return res.json({ ok: true, receivedAt });
@@ -201,7 +201,7 @@ app.post("/api/operational/snapshot", async (req, res) => {
     const receivedAt = new Date().toISOString(),sampledAt = new Date(req.body?.sampledAt || receivedAt),revision=Number(req.body?.revision);
     if (Number.isNaN(sampledAt.getTime())) return res.status(400).json({ error: "Invalid sampledAt" });
     if (!Number.isSafeInteger(revision) || revision <= 0) return res.status(400).json({ error: "Invalid snapshot revision" });
-    const { data: applied, error } = await supabase.rpc("store_operational_snapshot",{p_device_id:auth.device.id,p_schema_version:OPERATIONAL_SCHEMA_VERSION,p_engine_version:Number(req.body?.engineVersion)||null,p_revision:revision,p_sampled_at:sampledAt.toISOString(),p_received_at:receivedAt,p_snapshot:req.body});
+    const { data: applied, error } = await supabase.rpc("store_operational_snapshot",{p_device_id:auth.device.id,p_schema_version:OPERATIONAL_SCHEMA_VERSION,p_engine_version:null,p_revision:revision,p_sampled_at:sampledAt.toISOString(),p_received_at:receivedAt,p_snapshot:req.body});
     if (error) throw error;
     return res.json({ ok: true, applied: applied===true, ignoredAsStale: applied!==true, revision, receivedAt });
   } catch (error) {
@@ -213,12 +213,12 @@ app.get("/api/operational/state", async (req, res) => {
   try {
     const auth = await operationalDevice(req);
     if (auth.error) return res.status(auth.status).json({ error: auth.error });
-    const { data, error } = await supabase.from("operational_states").select("schema_version,engine_version,heartbeat_at,snapshot_sampled_at,snapshot_received_at,snapshot_revision,snapshot,updated_at").eq("device_id", auth.device.id).maybeSingle();
+    const { data, error } = await supabase.from("operational_states").select("schema_version,heartbeat_at,snapshot_sampled_at,snapshot_received_at,snapshot_revision,snapshot,updated_at").eq("device_id", auth.device.id).maybeSingle();
     if (error) throw error;
     if (!data) return res.json({ available: false, fresh: false, reason: "missing", freshnessMs: null, state: null });
     const now=Date.now(),heartbeatAt=data.heartbeat_at?new Date(data.heartbeat_at).getTime():0,sampledAt=data.snapshot_sampled_at?new Date(data.snapshot_sampled_at).getTime():0,receivedAt=data.snapshot_received_at?new Date(data.snapshot_received_at).getTime():0;
     const freshnessMs=heartbeatAt?Math.max(0,now-heartbeatAt):null,snapshotAgeMs=sampledAt?now-sampledAt:null,snapshotReceivedAgeMs=receivedAt?Math.max(0,now-receivedAt):null;
-    const compatible=Number(data.schema_version)===OPERATIONAL_SCHEMA_VERSION&&Number(data.engine_version)===ETA_ENGINE_VERSION&&Number(data.snapshot?.schemaVersion)===OPERATIONAL_SCHEMA_VERSION&&Number(data.snapshot?.engineVersion)===ETA_ENGINE_VERSION;
+    const compatible=Number(data.schema_version)===OPERATIONAL_SCHEMA_VERSION&&Number(data.snapshot?.schemaVersion)===OPERATIONAL_SCHEMA_VERSION&&typeof data.snapshot?.demand?.overload==='boolean';
     const clockValid=snapshotAgeMs!==null&&snapshotAgeMs>=-30000;
     const fresh=compatible&&!!data.snapshot&&freshnessMs!==null&&freshnessMs<=OPERATIONAL_FRESH_MS&&clockValid&&snapshotAgeMs<=OPERATIONAL_FRESH_MS&&snapshotReceivedAgeMs!==null&&snapshotReceivedAgeMs<=OPERATIONAL_FRESH_MS;
     const reason=!compatible?"incompatible":!data.snapshot?"missing_snapshot":!clockValid?"invalid_snapshot_clock":!fresh?"stale":null;
@@ -230,39 +230,7 @@ app.get("/api/operational/state", async (req, res) => {
 });
 
 
-const ETA_ENGINE_VERSION = 1;
-const ETA_STATIONS = ["bar", "kitchen"];
-const ETA_VALID_FOR_SECONDS = 45;
-const ETA_DELAYING_WINDOW_MINUTES = 3;
-function etaBatchFactor(qty) {
-  const q = Math.max(0, Number(qty) || 0);
-  return q <= 1 ? q : 1 + (q - 1) * 0.72;
-}
-function etaDifficultyMultiplier(value) {
-  const d = Math.max(1, Math.min(5, Number(value) || 1));
-  return [0, 0.80, 0.95, 1.10, 1.30, 1.55][d];
-}
-function etaLoadLevel(waitMinutes) {
-  const n = Math.max(0, Number(waitMinutes) || 0);
-  return n >= 30 ? "HIGH" : n >= 15 ? "ELEVATED" : "NORMAL";
-}
-function etaFindSlot(startAt, durationMinutes, reservations) {
-  let start = Math.max(0, Number(startAt) || 0), duration = Math.max(0, Number(durationMinutes) || 0) * 60000;
-  for (const r of (reservations || []).slice().sort((a,b)=>a.startAt-b.startAt)) {
-    if (start + duration <= r.startAt) break;
-    if (start < r.endAt && start + duration > r.startAt) start = r.endAt;
-  }
-  return start;
-}
-function etaRange(minutes) {
-  const n = Math.max(0, Number(minutes) || 0);
-  const buckets = [[0,10,15],[15,15,20],[20,20,30],[30,30,40],[40,40,50],[50,50,60]];
-  for (const [,min,max] of buckets) if (n <= max) return { minMinutes:min, maxMinutes:max };
-  return { minMinutes:60, maxMinutes:null };
-}
-function etaUnavailable(reason="POS_STATE_UNAVAILABLE") {
-  return { available:false, reason, message:"Не смогли рассчитать примерное время приготовления" };
-}
+const DEMAND_STATUS_VALID_FOR_SECONDS = 45;
 async function latestFreshOperationalState() {
   const { data: devices, error: deviceError } = await supabase.from("devices").select("id").eq("is_active", true);
   if (deviceError) throw deviceError;
@@ -270,15 +238,14 @@ async function latestFreshOperationalState() {
   if (!ids.length) return { available:false, reason:"missing" };
   // v1 has one location/POS identity. Never guess between multiple active devices.
   if (ids.length !== 1) return { available:false, reason:"ambiguous_location" };
-  const { data: rows, error } = await supabase.from("operational_states").select("device_id,schema_version,engine_version,heartbeat_at,snapshot_sampled_at,snapshot_received_at,snapshot").in("device_id", ids).order("heartbeat_at",{ascending:false}).limit(10);
+  const { data: rows, error } = await supabase.from("operational_states").select("device_id,schema_version,heartbeat_at,snapshot_sampled_at,snapshot_received_at,snapshot").in("device_id", ids).order("heartbeat_at",{ascending:false}).limit(10);
   if (error) throw error;
   const now = Date.now();
   for (const row of (rows || [])) {
     const heartbeatAt = row.heartbeat_at ? new Date(row.heartbeat_at).getTime() : 0;
     const sampledAt = row.snapshot_sampled_at ? new Date(row.snapshot_sampled_at).getTime() : 0;
     const receivedAt = row.snapshot_received_at ? new Date(row.snapshot_received_at).getTime() : 0;
-    const queueContract=ETA_STATIONS.every(st=>Number.isFinite(Number(row.snapshot?.production?.currentQueueMinutes?.[st])));
-    const compatible = Number(row.schema_version) === OPERATIONAL_SCHEMA_VERSION && Number(row.engine_version) === ETA_ENGINE_VERSION && Number(row.snapshot?.schemaVersion) === OPERATIONAL_SCHEMA_VERSION && Number(row.snapshot?.engineVersion) === ETA_ENGINE_VERSION && Number(row.snapshot?.prepCatalog?.version) === 1 && queueContract;
+    const compatible = Number(row.schema_version) === OPERATIONAL_SCHEMA_VERSION && Number(row.snapshot?.schemaVersion) === OPERATIONAL_SCHEMA_VERSION && typeof row.snapshot?.demand?.overload === "boolean";
     const heartbeatAge = heartbeatAt ? Math.max(0, now-heartbeatAt) : Infinity;
     const snapshotAge = sampledAt ? now-sampledAt : Infinity;
     const receivedAge = receivedAt ? Math.max(0, now-receivedAt) : Infinity;
@@ -287,64 +254,13 @@ async function latestFreshOperationalState() {
   }
   return { available:false, reason:(rows || []).length ? "stale_or_incompatible" : "missing" };
 }
-function etaPrepWork(lines, prepByExternalId) {
-  const result = {bar:{durationMinutes:0,workPoints:0},kitchen:{durationMinutes:0,workPoints:0}};
-  const add = (externalId, qty) => {
-    const prep = prepByExternalId.get(String(externalId));
-    if (!prep) throw new Error("PREP_MISSING");
-    const station = prep.station;
-    if (station === "none") return;
-    if (!ETA_STATIONS.includes(station)) throw new Error("PREP_INCOMPATIBLE");
-    const q = Number(qty);
-    if (!Number.isFinite(q) || q <= 0 || q > 99) throw new Error("INVALID_QTY");
-    result[station].durationMinutes += Math.max(1,Number(prep.basePrepMinutes)||1) * etaBatchFactor(q);
-    result[station].workPoints += q * etaDifficultyMultiplier(prep.difficulty);
-  };
-  for (const line of lines) {
-    add(line.externalId, line.qty);
-    for (const mod of (line.modifiers || [])) add(mod.externalId, Number(line.qty) * Number(mod.qty));
-  }
-  for (const row of Object.values(result)) {
-    row.durationMinutes=Math.round(row.durationMinutes*100)/100;
-    row.workPoints=Math.round(row.workPoints*100)/100;
-  }
-  return result;
-}
-function etaFromSnapshot(snapshot, work, now=Date.now(), requestedReadyAt=null) {
-  const stations={}, cartStations=ETA_STATIONS.filter(st=>work[st].durationMinutes>0);
-  for (const station of ETA_STATIONS) {
-    const currentWait=Math.max(0,Number(snapshot?.production?.currentQueueMinutes?.[station])||0);
-    const reservations=(snapshot?.scheduled||[]).map(o=>{
-      const duration=Math.max(0,Number(o?.work?.[station]?.durationMinutes)||0),ready=Number(o?.requestedReadyAt)||0;
-      return duration&&ready ? {startAt:ready-duration*60000,endAt:ready} : null;
-    }).filter(Boolean);
-    const duration=work[station].durationMinutes;
-    const requested=Number(requestedReadyAt)||0;
-    const desiredStart=requested>now&&duration ? Math.max(now,requested-duration*60000) : now;
-    const queueReadyAt=now+currentWait*60000;
-    const queueStart=Math.max(desiredStart,queueReadyAt);
-    const start=duration ? etaFindSlot(queueStart,duration,reservations) : now;
-    const wait=duration ? Math.max(0,(start-now)/60000) : 0;
-    const scheduleWait=duration ? Math.max(0,(desiredStart-now)/60000) : 0;
-    const loadWait=duration ? Math.max(0,(start-Math.max(now,desiredStart))/60000) : 0;
-    const completion=duration ? wait+duration : 0;
-    stations[station]={waitMinutes:Math.round(wait*100)/100,scheduleWaitMinutes:Math.round(scheduleWait*100)/100,loadWaitMinutes:Math.round(loadWait*100)/100,durationMinutes:duration,completionMinutes:Math.round(completion*100)/100,loadState:etaLoadLevel(loadWait)};
-  }
-  const criticalStation=cartStations.length?cartStations.slice().sort((a,b)=>stations[b].completionMinutes-stations[a].completionMinutes)[0]:null;
-  const criticalMinutes=criticalStation?stations[criticalStation].completionMinutes:0;
-  const delayingStations=cartStations.filter(st=>stations[st].loadWaitMinutes>0&&stations[st].completionMinutes>=criticalMinutes-ETA_DELAYING_WINDOW_MINUTES);
-  const loadedStations=delayingStations.filter(st=>stations[st].loadState!=="NORMAL").map(st=>({station:st,loadState:stations[st].loadState}));
-  const customerLoadState=loadedStations.some(x=>x.loadState==="HIGH")?"HIGH":loadedStations.length?"ELEVATED":"NORMAL";
-  const safetyMinutes=criticalMinutes>0?Math.max(2,criticalMinutes*0.10):0;
-  const ranged=etaRange(criticalMinutes+safetyMinutes);
-  return {criticalStation,delayingStations,loadedStations,customerLoadState,waitIncreasedByLoad:delayingStations.length>0,estimatedMinutes:Math.round((criticalMinutes+safetyMinutes)*100)/100,...ranged};
-}
+
 app.post("/api/eta/estimate", async (_req, res) => {
   try {
     const stateResult=await latestFreshOperationalState();
     if (!stateResult.available) return res.json({available:false,demandState:"UNAVAILABLE"});
     const overload=stateResult.state?.demand?.overload===true;
-    return res.json({available:true,demandState:overload?"OVERLOAD":"NORMAL",overload,calculatedAt:new Date().toISOString(),validForSeconds:ETA_VALID_FOR_SECONDS});
+    return res.json({available:true,demandState:overload?"OVERLOAD":"NORMAL",overload,calculatedAt:new Date().toISOString(),validForSeconds:DEMAND_STATUS_VALID_FOR_SECONDS});
   } catch(error) {
     console.error("POST /api/eta/estimate:",error);
     return res.json({available:false,demandState:"UNAVAILABLE"});
