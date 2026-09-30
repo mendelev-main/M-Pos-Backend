@@ -13,7 +13,7 @@ test('product detail uses transition based visibility instead of display togglin
 test('Owner rollout also protects legacy phone confirmation from a forged callback',async()=>{
  const {mountOwnerRoutes,ownerBotAuthorized}=await import('../owner-auth.js');
  const routes={};let confirmations=0;
- const app={use(){},get(){},put(){},patch(){},post(p,h){routes[p]=h},listen(){}};const express=()=>app;express.json=()=>{};express.static=()=>{};
+ const app={use(){},get(){},put(){},patch(){},delete(){},post(p,h){routes[p]=h},listen(){}};const express=()=>app;express.json=()=>{};express.static=()=>{};
  const context={console,express,setInterval(){},cors:()=>{},mountOwnerRoutes,ownerBotAuthorized,process:{env:{SUPABASE_URL:'test',SUPABASE_SERVICE_ROLE_KEY:'test',OWNER_AUTH_ENABLED:'true',OWNER_BOT_SHARED_SECRET:'s'.repeat(43)}},createClient:()=>({}),createPhoneVerificationService:()=>({confirm:async()=>{confirmations++;return {ok:true}}}),createCheckoutService:()=>({finalizeByVerificationToken:async()=>({ok:true})})};
  vm.createContext(context);vm.runInContext(validation,context);vm.runInContext(fs.readFileSync(path.join(root,'server.js'),'utf8').replace(/^import .*;\n/gm,''),context);
  for(const secret of [undefined,'wrong','s'.repeat(43)]){const res={status(n){this.code=n;return this},json(value){this.body=value;return this}};await routes['/api/phone-verification/:token/confirm']({header:()=>secret,body:{phone:'+375291234567',telegramUserId:123},params:{token:'token'}},res);assert.equal(res.code||200,secret==='s'.repeat(43)?200:403);}
