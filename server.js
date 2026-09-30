@@ -230,41 +230,48 @@ app.get("/api/operational/state", async (req, res) => {
 
 
 const DEMAND_STATUS_VALID_FOR_SECONDS = 45;
-async function latestFreshOperationalState() {
+async function latestStoredDemandState() {
   const { data: devices, error: deviceError } = await supabase.from("devices").select("id").eq("is_active", true);
   if (deviceError) throw deviceError;
   const ids = (devices || []).map(x=>x.id);
   if (!ids.length) return { available:false, reason:"missing" };
   // v1 has one location/POS identity. Never guess between multiple active devices.
   if (ids.length !== 1) return { available:false, reason:"ambiguous_location" };
-  const { data: rows, error } = await supabase.from("operational_states").select("device_id,schema_version,heartbeat_at,snapshot_sampled_at,snapshot_received_at,snapshot").in("device_id", ids).order("heartbeat_at",{ascending:false}).limit(10);
+  const { data: rows, error } = await supabase
+    .from("operational_states")
+    .select("device_id,schema_version,snapshot_received_at,snapshot")
+    .in("device_id", ids)
+    .order("snapshot_received_at",{ascending:false})
+    .limit(10);
   if (error) throw error;
-  const now = Date.now();
   for (const row of (rows || [])) {
-    const heartbeatAt = row.heartbeat_at ? new Date(row.heartbeat_at).getTime() : 0;
-    const sampledAt = row.snapshot_sampled_at ? new Date(row.snapshot_sampled_at).getTime() : 0;
-    const receivedAt = row.snapshot_received_at ? new Date(row.snapshot_received_at).getTime() : 0;
-    const compatible = Number(row.schema_version) === OPERATIONAL_SCHEMA_VERSION && Number(row.snapshot?.schemaVersion) === OPERATIONAL_SCHEMA_VERSION && typeof row.snapshot?.demand?.overload === "boolean";
-    const heartbeatAge = heartbeatAt ? Math.max(0, now-heartbeatAt) : Infinity;
-    const snapshotAge = sampledAt ? now-sampledAt : Infinity;
-    const receivedAge = receivedAt ? Math.max(0, now-receivedAt) : Infinity;
-    const clockValid = Number.isFinite(snapshotAge) && snapshotAge >= -30000;
-    if (compatible && row.snapshot && clockValid && snapshotAge <= OPERATIONAL_FRESH_MS && receivedAge <= OPERATIONAL_FRESH_MS && heartbeatAge <= OPERATIONAL_FRESH_MS) return { available:true, state:row.snapshot };
+    const compatible = Number(row.schema_version) === OPERATIONAL_SCHEMA_VERSION
+      && Number(row.snapshot?.schemaVersion) === OPERATIONAL_SCHEMA_VERSION
+      && typeof row.snapshot?.demand?.overload === "boolean";
+    if (compatible) return { available:true, state:row.snapshot, storedAt:row.snapshot_received_at || null };
   }
-  return { available:false, reason:(rows || []).length ? "stale_or_incompatible" : "missing" };
+  return { available:false, reason:(rows || []).length ? "incompatible" : "missing" };
 }
 
 async function demandStatusResponse(res) {
   try {
-    const stateResult=await latestFreshOperationalState();
+    const stateResult=await latestStoredDemandState();
     if (!stateResult.available) return res.json({available:false,demandState:"UNAVAILABLE"});
     const overload=stateResult.state?.demand?.overload===true;
-    return res.json({available:true,demandState:overload?"OVERLOAD":"NORMAL",overload,calculatedAt:new Date().toISOString(),validForSeconds:DEMAND_STATUS_VALID_FOR_SECONDS});
+    return res.json({
+      available:true,
+      demandState:overload?"OVERLOAD":"NORMAL",
+      overload,
+      storedAt:stateResult.storedAt,
+      calculatedAt:new Date().toISOString(),
+      validForSeconds:DEMAND_STATUS_VALID_FOR_SECONDS
+    });
   } catch(error) {
     console.error("Demand status:",error);
     return res.json({available:false,demandState:"UNAVAILABLE"});
   }
 }
+
 app.get("/api/demand/status", async (_req,res) => demandStatusResponse(res));
 // Temporary compatibility route for already cached/older web clients. It performs no ETA calculation.
 app.post("/api/eta/estimate", async (_req,res) => demandStatusResponse(res));
