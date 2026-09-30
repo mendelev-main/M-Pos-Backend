@@ -231,6 +231,7 @@ app.get("/api/operational/state", async (req, res) => {
 const ETA_ENGINE_VERSION = 1;
 const ETA_STATIONS = ["bar", "kitchen"];
 const ETA_VALID_FOR_SECONDS = 45;
+const ETA_DELAYING_WINDOW_MINUTES = 3;
 function etaBatchFactor(qty) {
   const q = Math.max(0, Number(qty) || 0);
   return q <= 1 ? q : 1 + (q - 1) * 0.72;
@@ -289,7 +290,7 @@ function etaPrepWork(lines, prepByExternalId) {
     const q = Number(qty);
     if (!Number.isFinite(q) || q <= 0 || q > 99) throw new Error("INVALID_QTY");
     result[station].durationMinutes += Math.max(1,Number(prep.basePrepMinutes)||1) * etaBatchFactor(q);
-    result[station].workPoints += q * etaDifficultyMultiplier(prep.difficulty);
+    result[station].workPoints += q * Math.max(1,Math.min(5,Number(prep.difficulty)||1));
   };
   for (const line of lines) {
     add(line.externalId, line.qty);
@@ -317,7 +318,7 @@ function etaFromSnapshot(snapshot, work, now=Date.now()) {
   }
   const criticalStation=cartStations.length?cartStations.slice().sort((a,b)=>stations[b].completionMinutes-stations[a].completionMinutes)[0]:null;
   const criticalMinutes=criticalStation?stations[criticalStation].completionMinutes:0;
-  const delayingStations=cartStations.filter(st=>stations[st].waitMinutes>0&&stations[st].completionMinutes>=criticalMinutes-3);
+  const delayingStations=cartStations.filter(st=>stations[st].waitMinutes>0&&stations[st].completionMinutes>=criticalMinutes-ETA_DELAYING_WINDOW_MINUTES);
   const loadedStations=delayingStations.filter(st=>stations[st].loadState!=="NORMAL").map(st=>({station:st,loadState:stations[st].loadState}));
   const customerLoadState=loadedStations.some(x=>x.loadState==="HIGH")?"HIGH":loadedStations.length?"ELEVATED":"NORMAL";
   const safetyMinutes=criticalMinutes>0?Math.max(2,criticalMinutes*0.10):0;
