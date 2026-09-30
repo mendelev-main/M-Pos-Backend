@@ -41,3 +41,4 @@ end;
 $$;
 
 revoke all on function public.store_operational_snapshot(uuid,integer,integer,bigint,timestamptz,timestamptz,jsonb) from public;
+grant execute on function public.store_operational_snapshot(uuid,integer,integer,bigint,timestamptz,timestamptz,jsonb) to service_role;
