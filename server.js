@@ -291,7 +291,7 @@ app.get("/api/menu", async (_req, res) => {
 const eventClients = new Set(); let eventPollBusy = false;
 async function pushNewOrders(){
   if(eventPollBusy || !eventClients.size) return; eventPollBusy = true;
-  try { const { data, error } = await supabase.from("orders").select("id,external_id,status,order_type,customer_name,phone,address,comment,total,delivery_fee,created_at,updated_at,order_items(id,product_id,external_product_id,product_name,price,quantity,comment)").eq("status", "new").order("created_at", { ascending: false }).limit(20); if(error) throw error; const payload = JSON.stringify({type:"orders",orders:data||[]}); for(const client of eventClients){ try { client.res.write(`data: ${payload}\n\n`); } catch(e) {} } }
+  try { const { data, error } = await supabase.from("orders").select("id,external_id,status,order_type,customer_id,customer_name,phone,address,comment,total,delivery_fee,created_at,updated_at,order_items(id,product_id,external_product_id,product_name,price,quantity,comment)").eq("status", "new").order("created_at", { ascending: false }).limit(20); if(error) throw error; const payload = JSON.stringify({type:"orders",orders:data||[]}); for(const client of eventClients){ try { client.res.write(`data: ${payload}\n\n`); } catch(e) {} } }
   catch(error){ console.error("order event poll:", error); } finally { eventPollBusy = false; }
 }
 setInterval(pushNewOrders, 2000);
