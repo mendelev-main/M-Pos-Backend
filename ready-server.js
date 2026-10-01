@@ -118,7 +118,7 @@ if (Array.isArray(stack)) {
   if (acceptHandler) {
     acceptLayer.route.stack[0].handle = async (req, res, next) => {
       const estimate = String(req.body?.readyEstimate || "").trim();
-      const estimateLabel = manualReadyEstimateLabels.get(estimate);
+      const estimateLabel = readyEstimateLabel(estimate);
       if (!estimateLabel) return res.status(400).json({ error: "Выберите примерное время готовности" });
       const originalJson = res.json.bind(res);
       res.json = body => {
@@ -136,6 +136,11 @@ if (Array.isArray(stack)) {
     const [rootLayer] = stack.splice(index, 1);
     stack.unshift(rootLayer);
   }
+}
+
+function readyEstimateLabel(value) {
+  if (/^at:([01]\d|2[0-3]):[0-5]\d$/.test(value)) return 'будет готово к ' + value.slice(3);
+  return manualReadyEstimateLabels.get(value);
 }
 
 const manualReadyEstimateLabels = new Map([

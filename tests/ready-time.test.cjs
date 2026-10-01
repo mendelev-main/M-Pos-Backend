@@ -1,0 +1,3 @@
+const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
+const source=fs.readFileSync(path.join(__dirname,'../ready-server.js'),'utf8'),c={};vm.createContext(c);vm.runInContext(source.slice(source.indexOf('function readyEstimateLabel('),source.indexOf('runningApp.post("/api/orders/:id/ready"')),c);
+test('custom ready time formats safely and preset estimates stay compatible',()=>{assert.equal(c.readyEstimateLabel('at:18:45'),'будет готово к 18:45');assert.equal(c.readyEstimateLabel('at:00:00'),'будет готово к 00:00');assert.equal(c.readyEstimateLabel('15m'),'15 минут');for(const v of ['at:24:00','at:12:60','at:<b>','custom',''])assert.equal(c.readyEstimateLabel(v),undefined)});
