@@ -125,56 +125,20 @@ export function createCheckoutService({ supabase, normalizePhone, validateOrderC
 
   async function finalizeByVerificationToken(verificationToken) {
     const verificationHash = hash(verificationToken);
-    const { data: session, error } = await supabase.from("checkout_sessions")
-      .select("id,status,phone,order_payload,expires_at,tracking_token,order_id")
-      .eq("verification_token_hash", verificationHash)
-      .maybeSingle();
-    if (error) throw error;
-    if (!session) return null;
-    if (session.status === "ORDER_CREATED") return { ok: true, orderId: session.order_id };
-    if (session.status !== "PENDING" || new Date(session.expires_at).getTime() <= Date.now()) return { ok: false, reason: "EXPIRED" };
-
-    const verification = await phoneVerification.get(verificationToken);
-    if (!verification || verification.status !== "VERIFIED" || verification.phone !== session.phone) return { ok: false, reason: "NOT_VERIFIED" };
-
-    const consumed = await phoneVerification.consume(verificationToken, session.phone);
-    if (!consumed) return { ok: false, reason: "ALREADY_USED" };
-
-    const order = session.order_payload || {};
-    const customer = await resolveCustomer({ phone: session.phone, name: order.customerName, telegramUserId: verification.telegram_user_id || null });
     const externalId = `WEB-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
     const trackingToken = randomUUID().replace(/-/g, "");
-    const { data: created, error: orderError } = await supabase.from("orders").insert({
-      external_id: externalId,
-      tracking_token: trackingToken,
-      status: "new",
-      order_type: order.orderType,
-      customer_name: order.customerName,
-      phone: session.phone,
-      customer_id: customer.id,
-      address: order.orderType === "Доставка" ? order.address : null,
-      comment: order.comment || null,
-      total: Number(order.total || 0),
-      delivery_fee: Number(order.fee || 0),
-    }).select("id").single();
-    if (orderError) throw orderError;
-
-    const items = Array.isArray(order.items) ? order.items : [];
-    const { error: itemError } = await supabase.from("order_items").insert(items.map(item => ({ ...item, order_id: created.id })));
-    if (itemError) throw itemError;
-
-    const now = new Date().toISOString();
-    const { error: updateError } = await supabase.from("checkout_sessions").update({
-      status: "ORDER_CREATED",
-      verified_at: verification.verified_at || now,
-      order_id: created.id,
-      tracking_token: trackingToken,
-      telegram_user_id: verification.telegram_user_id || null,
-      updated_at: now,
-    }).eq("id", session.id);
-    if (updateError) throw updateError;
-
-    return { ok: true, orderId: created.id, customerId: customer.id };
+    const { data, error } = await supabase.rpc("finalize_verified_checkout", {
+      p_verification_token_hash: verificationHash,
+      p_external_id: externalId,
+      p_tracking_token: trackingToken,
+    });
+    if (error) {
+      const message = String(error.message || "");
+      if (message.includes("CHECKOUT_EXPIRED")) return { ok: false, reason: "EXPIRED" };
+      if (message.includes("VERIFICATION_NOT_READY")) return { ok: false, reason: "NOT_VERIFIED" };
+      throw error;
+    }
+    return data || null;
   }
 
   return { create, get, finalizeByVerificationToken };
