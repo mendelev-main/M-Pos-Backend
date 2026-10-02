@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isOrderingOpen, isSiteSleepWindow, millisecondsUntilSiteWake, venueMinute } from "../business-hours.js";
+import { closedPageHtml, isOrderingOpen, isSiteSleepWindow, millisecondsUntilSiteWake, venueMinute } from "../business-hours.js";
 
 const zone="Europe/Minsk";
 const at=iso=>new Date(iso);
@@ -17,4 +17,10 @@ test("online ordering is accepted only from 10:00 until 23:00 venue time",()=>{
   assert.equal(isOrderingOpen(at("2026-10-03T07:00:00Z"),zone),true);
   assert.equal(isOrderingOpen(at("2026-10-03T19:59:00Z"),zone),true);
   assert.equal(isOrderingOpen(at("2026-10-03T20:00:00Z"),zone),false);
+});
+
+test("overnight page shows the venue message and working hours",()=>{
+  const html=closedPageHtml();
+  assert.match(html,/Ушли отдыхать, скоро вернемся/);
+  assert.match(html,/Работаем с 10:00 до 23:00/);
 });
