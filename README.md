@@ -177,26 +177,6 @@ Backend хранит snapshot отдельно от резервов подтв�
 выкладки backend первый snapshot создаётся следующей складской операцией на POS либо существующей
 ручной синхронизацией меню. До первого snapshot сайт безопасно считает остаток неподтверждённым.
 
-## Системные уведомления на iPad
-
-Миграция `supabase/migrations/20261002190000_order_push_notifications.sql` добавляет APNs device tokens
-и transactional outbox для новых заказов. iPad регистрирует token через защищённый device key. Worker
-отправляет privacy-safe alert «Новый онлайн-заказ» и повторяет временные ошибки; сбой APNs не влияет на
-создание заказа. Устаревшие Apple tokens отключаются автоматически, а уведомления старше 15 минут
-закрываются без отправки, чтобы после восстановления APNs не приходил устаревший backlog.
-
-Railway secrets:
-
-| Переменная | Назначение |
-| --- | --- |
-| `APNS_TEAM_ID` | Team ID из Apple Developer Membership |
-| `APNS_KEY_ID` | Key ID ключа с Apple Push Notifications service |
-| `APNS_PRIVATE_KEY` | Полное содержимое `.p8`; допустимы переводы строк как `\\n` |
-| `APNS_BUNDLE_ID` | `com.prilavok.pos` |
-
-Один APNs signing key работает с production и sandbox endpoint. Debug build регистрирует development
-token, Release — production token. Секреты Apple никогда не передаются на iPad и не хранятся в БД.
-
 ## Owner и роли POS — подготовлено к отдельному включению
 
 Модуль `owner-auth.js` добавляет подтверждение единственного владельца и восстановление PIN через существующий Telegram-бот. Обычный вход, права ролей и PIN остаются на iPad в Keychain. Сервер не получает PIN и не изменяет чеки, смены, товары или остатки.

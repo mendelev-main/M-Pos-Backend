@@ -18,7 +18,6 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
 if (!supabaseUrl || !supabaseKey) throw new Error("Missing Supabase configuration");
 const supabase = createClient(supabaseUrl, supabaseKey);
-const pushNotifications = runningApp.locals.pushNotifications;
 
 function shortOrderNumber(externalId) {
   return String(externalId || "").slice(0, 8);
@@ -202,17 +201,6 @@ async function notifyNewAndAcceptedOrders() {
 notifyNewAndAcceptedOrders.sent = new Set();
 setTimeout(notifyNewAndAcceptedOrders, 3000);
 setInterval(notifyNewAndAcceptedOrders, 3000);
-
-let pushDrainBusy = false;
-async function drainOrderPushNotifications() {
-  if (!pushNotifications || pushDrainBusy) return;
-  pushDrainBusy = true;
-  try { await pushNotifications.drain(); }
-  catch (error) { console.error("Order push drain:", error); }
-  finally { pushDrainBusy = false; }
-}
-setTimeout(drainOrderPushNotifications, 3000);
-setInterval(drainOrderPushNotifications, 3000);
 
 // Once a day remove ready orders that have already been kept for 24 hours.
 // Delete child rows explicitly so cleanup works regardless of FK cascade setup.
