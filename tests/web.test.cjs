@@ -38,6 +38,7 @@ test('online menu and online ordering use separate product visibility channels',
  assert.match(order,/fetch\(API\+'\/api\/menu'/);assert.match(menu,/fetch\('\/api\/menu\?surface=menu'/);
  assert.match(server,/visible_in_menu: p\.visibleInOnlineMenu !== false/);assert.match(server,/menuSurface \? "visible_in_menu" : "available_online"/);
  assert.match(server,/missingOnlineMenuColumn/);assert.match(server,/withoutOnlineMenuColumn/);
+ assert.match(server,/available_online: c\.availableOnline !== false/);assert.match(server,/visible_in_menu: c\.visibleInOnlineMenu !== false/);
 });
 
 test('menu endpoint selects the requested visibility column',async()=>{
@@ -49,4 +50,14 @@ test('menu endpoint selects the requested visibility column',async()=>{
  const response={json(value){this.body=value;return this},status(value){this.code=value;return this}};
  await routes['/api/menu']({query:{}},response);await routes['/api/menu']({query:{surface:'menu'}},response);
  assert.deepEqual(filters.filter(row=>row.table==='products'&&row.key!=='is_active').map(row=>row.key),['available_online','visible_in_menu']);
+ assert.deepEqual(filters.filter(row=>row.table==='categories'&&row.key!=='is_active').map(row=>row.key),['available_online','visible_in_menu']);
+});
+
+test('menu endpoint removes products whose category is hidden on the requested surface',async()=>{
+ const routes={};const app={use(){},get(path,handler){routes[path]=handler},put(){},patch(){},delete(){},post(){},listen(){}};const express=()=>app;express.json=()=>{};express.static=()=>{};
+ const query=table=>{const q={select(){return q},eq(){return q},order(){return q},then(resolve){resolve({data:table==='categories'?[{id:'visible',name:'Видимая'}]:table==='products'?[{id:'shown',category_id:'visible'},{id:'hidden',category_id:'hidden'}]:[],error:null})}};return q};
+ const context={console,express,cors:()=>{},mountOwnerRoutes(){},ownerBotAuthorized(){return true},createPhoneVerificationService:()=>({}),createCheckoutService:()=>({}),createAvailabilityService:()=>({attachToProducts:async products=>products}),calculateLoyaltyTransition(){},loyaltyIdempotencyKey(){},validateLoyaltyAllocation(){},randomUUID:()=>'',process:{env:{SUPABASE_URL:'test',SUPABASE_SERVICE_ROLE_KEY:'test'}},createClient:()=>({from:query}),setInterval(){}};
+ vm.createContext(context);vm.runInContext(validation,context);vm.runInContext(fs.readFileSync(path.join(root,'server.js'),'utf8').replace(/^import .*;\n/gm,''),context);
+ const response={json(value){this.body=value;return this},status(value){this.code=value;return this}};await routes['/api/menu']({query:{}},response);
+ assert.deepEqual(response.body.products.map(product=>product.id),['shown']);assert.deepEqual(response.body.categories.map(category=>category.id),['visible']);
 });

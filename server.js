@@ -43,6 +43,16 @@ function withoutOnlineMenuColumn(rows) {
   return rows.map(({ visible_in_menu: _visibleInMenu, ...row }) => row);
 }
 
+function missingCategoryChannelColumn(error) {
+  const message = String(error?.message || error?.details || "").toLowerCase();
+  return ["42703", "PGRST204"].includes(String(error?.code || ""))
+    && (message.includes("available_online") || message.includes("visible_in_menu"));
+}
+
+function withoutCategoryChannelColumns(rows) {
+  return rows.map(({ available_online: _availableOnline, visible_in_menu: _visibleInMenu, ...row }) => row);
+}
+
 app.get("/health", (_req, res) => res.json({ ok: true, service: "prilavok-backend" }));
 
 app.post("/api/checkout", async (req, res) => {
@@ -154,8 +164,12 @@ app.post("/api/menu/sync", async (req, res) => {
     if (!deviceKey) return res.status(401).json({ error: "Missing device key" });
     const { data: device, error: deviceError } = await supabase.from("devices").upsert({ device_key: deviceKey, name: deviceName || "Прилавок iPad", is_active: true, last_sync_at: new Date().toISOString() }, { onConflict: "device_key" }).select("id").single();
     if (deviceError) throw deviceError;
-    const categoryRows = categories.map((c, index) => ({ external_id: String(c.externalId || `category:${String(c.name || "").trim()}`), name: String(c.name || "").trim(), color: c.color ? String(c.color) : null, sort_order: Number.isFinite(Number(c.sortOrder)) ? Number(c.sortOrder) : index, is_active: c.isActive !== false })).filter(c => c.name && c.external_id);
-    if (categoryRows.length) { const { error } = await supabase.from("categories").upsert(categoryRows, { onConflict: "external_id" }); if (error) throw error; }
+    const categoryRows = categories.map((c, index) => ({ external_id: String(c.externalId || `category:${String(c.name || "").trim()}`), name: String(c.name || "").trim(), color: c.color ? String(c.color) : null, sort_order: Number.isFinite(Number(c.sortOrder)) ? Number(c.sortOrder) : index, is_active: c.isActive !== false, available_online: c.availableOnline !== false, visible_in_menu: c.visibleInOnlineMenu !== false })).filter(c => c.name && c.external_id);
+    if (categoryRows.length) {
+      let { error } = await supabase.from("categories").upsert(categoryRows, { onConflict: "external_id" });
+      if (missingCategoryChannelColumn(error)) ({ error } = await supabase.from("categories").upsert(withoutCategoryChannelColumns(categoryRows), { onConflict: "external_id" }));
+      if (error) throw error;
+    }
     const { data: existingCategories, error: existingCategoriesError } = await supabase.from("categories").select("id,external_id");
     if (existingCategoriesError) throw existingCategoriesError;
     const externalIds = categoryRows.map(c => c.external_id); const categoryExternalIdSet = new Set(externalIds);
@@ -304,15 +318,19 @@ app.post("/api/eta/estimate", async (_req,res) => demandStatusResponse(res));
 
 app.get("/api/menu", async (req, res) => {
   try {
-    const { data: categories, error: categoriesError } = await supabase.from("categories").select("id,name,color,sort_order,is_active,external_id").eq("is_active", true).order("sort_order", { ascending: true }).order("name", { ascending: true });
-    if (categoriesError) throw categoriesError;
     const menuSurface = String(req.query?.surface || "").toLowerCase() === "menu";
+    const loadCategories = visibilityColumn => supabase.from("categories").select("id,name,color,sort_order,is_active,external_id").eq("is_active", true).eq(visibilityColumn, true).order("sort_order", { ascending: true }).order("name", { ascending: true });
+    let { data: categories, error: categoriesError } = await loadCategories(menuSurface ? "visible_in_menu" : "available_online");
+    if (missingCategoryChannelColumn(categoriesError)) ({ data: categories, error: categoriesError } = await supabase.from("categories").select("id,name,color,sort_order,is_active,external_id").eq("is_active", true).order("sort_order", { ascending: true }).order("name", { ascending: true }));
+    if (categoriesError) throw categoriesError;
     const loadProducts = visibilityColumn => supabase.from("products").select("id,name,description,price,category_id,image_url,sort_order,is_active,available_online,external_id").eq("is_active", true).eq(visibilityColumn, true).order("sort_order", { ascending: true }).order("name", { ascending: true });
     let { data: products, error: productsError } = await loadProducts(menuSurface ? "visible_in_menu" : "available_online");
     if (menuSurface && missingOnlineMenuColumn(productsError)) ({ data: products, error: productsError } = await loadProducts("available_online"));
     if (productsError) throw productsError;
-    const onlineCategoryIds = new Set((products ?? []).map(p => p.category_id).filter(Boolean));
-    const availableProducts=await availability.attachToProducts(products??[]);
+    const allowedCategoryIds = new Set((categories ?? []).map(c => c.id));
+    const surfaceProducts = (products ?? []).filter(p => !p.category_id || allowedCategoryIds.has(p.category_id));
+    const onlineCategoryIds = new Set(surfaceProducts.map(p => p.category_id).filter(Boolean));
+    const availableProducts=await availability.attachToProducts(surfaceProducts);
     res.json({ categories: (categories ?? []).filter(c => onlineCategoryIds.has(c.id)), products: availableProducts });
   } catch (error) { console.error("GET /api/menu:", error); res.status(500).json({ error: "Failed to load menu" }); }
 });
