@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 export const CHECKOUT_TTL_MS = 5 * 60 * 1000;
 
-export function createCheckoutService({ supabase, normalizePhone, validateOrderContact, phoneVerification, deliveryFee = 0 }) {
+export function createCheckoutService({ supabase, normalizePhone, validateOrderContact, phoneVerification, availability = null, deliveryFee = 0 }) {
   const hash = value => createHash("sha256").update(String(value)).digest("hex");
 
   async function prepareOrder(payload) {
@@ -31,6 +31,7 @@ export function createCheckoutService({ supabase, normalizePhone, validateOrderC
     if (productsError) throw productsError;
     const productMap = new Map((products || []).map(p => [p.id, p]));
     if (productMap.size !== uniqueIds.length) return { error: "Один из товаров больше недоступен для заказа", status: 400 };
+    if(availability){const availabilityError=await availability.validateOrder(products,requestedItems);if(availabilityError)return {error:availabilityError,status:409}}
 
     const items = [];
     let subtotal = 0;
@@ -136,6 +137,8 @@ export function createCheckoutService({ supabase, normalizePhone, validateOrderC
       const message = String(error.message || "");
       if (message.includes("CHECKOUT_EXPIRED")) return { ok: false, reason: "EXPIRED" };
       if (message.includes("VERIFICATION_NOT_READY")) return { ok: false, reason: "NOT_VERIFIED" };
+      if (message.includes("OUT_OF_STOCK")) return { ok: false, reason: "OUT_OF_STOCK" };
+      if (message.includes("AVAILABILITY_UNAVAILABLE")) return { ok: false, reason: "AVAILABILITY_UNAVAILABLE" };
       throw error;
     }
     return data || null;

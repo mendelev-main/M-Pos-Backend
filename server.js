@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
 import { createPhoneVerificationService } from "./phone-verification.js";
 import { createCheckoutService } from "./checkout-service.js";
+import { createAvailabilityService } from "./availability-service.js";
 import { calculateLoyaltyTransition, loyaltyIdempotencyKey } from "./loyalty-engine.js";
 import { validateLoyaltyAllocation } from "./loyalty-allocation.js";
 
@@ -30,7 +31,8 @@ if (!supabaseUrl || !supabaseKey) {
 const supabase = createClient(supabaseUrl, supabaseKey);
 mountOwnerRoutes(app,{db:supabase});
 const phoneVerification = createPhoneVerificationService(supabase, normalizePhone);
-const checkout = createCheckoutService({ supabase, normalizePhone, validateOrderContact, phoneVerification, deliveryFee });
+const availability = createAvailabilityService({supabase});
+const checkout = createCheckoutService({ supabase, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee });
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "prilavok-backend" }));
 
@@ -92,7 +94,8 @@ app.post("/api/phone-verification/:token/confirm", async (req, res) => {
 
     const finalized = await checkout.finalizeByVerificationToken(req.params.token);
     if (finalized && !finalized.ok) {
-      return res.status(409).json({ ok: false, error: "Не удалось завершить оформление заказа", reason: finalized.reason });
+      const stockError=finalized.reason==="OUT_OF_STOCK"?"Товар закончился или его осталось недостаточно":finalized.reason==="AVAILABILITY_UNAVAILABLE"?"Актуальные остатки временно недоступны":"Не удалось завершить оформление заказа";
+      return res.status(409).json({ ok: false, error: stockError, reason: finalized.reason });
     }
     return res.json({ ...result, orderCreated: Boolean(finalized?.ok) });
   } catch (error) {
@@ -160,6 +163,14 @@ app.post("/api/menu/sync", async (req, res) => {
     if (staleProductIds.length) { const { error } = await supabase.from("products").update({ is_active: false, available_online: false }).in("id", staleProductIds); if (error) throw error; }
     return res.json({ ok: true, deviceId: device?.id || null, categories: categoryRows.length, products: productRows.length, syncedAt: new Date().toISOString() });
   } catch (error) { console.error("POST /api/menu/sync:", error); return res.status(500).json({ error: "Failed to sync menu" }); }
+});
+
+app.post("/api/availability/snapshot",async(req,res)=>{
+  try{
+    const result=await availability.store(req.header("x-device-key")||req.body?.deviceKey,req.body);
+    if(result.error)return res.status(result.status||400).json({error:result.error});
+    return res.json(result);
+  }catch(error){console.error("POST /api/availability/snapshot:",error);return res.status(500).json({error:"Failed to store availability snapshot"})}
 });
 
 
@@ -285,7 +296,8 @@ app.get("/api/menu", async (_req, res) => {
     const { data: products, error: productsError } = await supabase.from("products").select("id,name,description,price,category_id,image_url,sort_order,is_active,available_online,external_id").eq("is_active", true).eq("available_online", true).order("sort_order", { ascending: true }).order("name", { ascending: true });
     if (productsError) throw productsError;
     const onlineCategoryIds = new Set((products ?? []).map(p => p.category_id).filter(Boolean));
-    res.json({ categories: (categories ?? []).filter(c => onlineCategoryIds.has(c.id)), products: products ?? [] });
+    const availableProducts=await availability.attachToProducts(products??[]);
+    res.json({ categories: (categories ?? []).filter(c => onlineCategoryIds.has(c.id)), products: availableProducts });
   } catch (error) { console.error("GET /api/menu:", error); res.status(500).json({ error: "Failed to load menu" }); }
 });
 
@@ -415,7 +427,7 @@ app.post("/api/orders", async (req, res) => {
     const created=Array.isArray(order)?order[0]:order;
     if(!created?.id)throw new Error("Atomic order creation returned no order");
     res.status(201).json({ ok: true, orderId: created.id, externalId, trackingToken, total, deliveryFee: fee });
-  } catch (error) { console.error("POST /api/orders:", error); res.status(500).json({ error: "Не удалось создать заказ" }); }
+  } catch (error) { const message=String(error?.message||"");console.error("POST /api/orders:", error);if(message.includes("OUT_OF_STOCK"))return res.status(409).json({error:"Товар закончился или его осталось недостаточно"});if(message.includes("AVAILABILITY_UNAVAILABLE"))return res.status(409).json({error:"Актуальные остатки временно недоступны"});res.status(500).json({ error: "Не удалось создать заказ" }); }
 });
 
 app.get("/api/orders/:token", async (req, res) => {

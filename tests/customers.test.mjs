@@ -16,7 +16,7 @@ test("verified checkout delegates all writes to one atomic RPC", async()=>{
 });
 
 test("atomic checkout maps safe business errors and permits idempotent result",async()=>{
-  for(const [message,reason] of [["CHECKOUT_EXPIRED","EXPIRED"],["VERIFICATION_NOT_READY","NOT_VERIFIED"]]){
+  for(const [message,reason] of [["CHECKOUT_EXPIRED","EXPIRED"],["VERIFICATION_NOT_READY","NOT_VERIFIED"],["OUT_OF_STOCK:pizza","OUT_OF_STOCK"],["AVAILABILITY_UNAVAILABLE","AVAILABILITY_UNAVAILABLE"]]){
     const service=createCheckoutService({supabase:{rpc:async()=>({data:null,error:{message}})},normalizePhone:x=>x,validateOrderContact:()=>"",phoneVerification:{}});
     assert.deepEqual(await service.finalizeByVerificationToken("token"),{ok:false,reason});
   }
