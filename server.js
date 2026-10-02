@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { createPhoneVerificationService } from "./phone-verification.js";
 import { createCheckoutService } from "./checkout-service.js";
 import { createAvailabilityService } from "./availability-service.js";
+import { createPushNotificationService } from "./push-notification-service.js";
 import { calculateLoyaltyTransition, loyaltyIdempotencyKey } from "./loyalty-engine.js";
 import { validateLoyaltyAllocation } from "./loyalty-allocation.js";
 
@@ -32,6 +33,8 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 mountOwnerRoutes(app,{db:supabase});
 const phoneVerification = createPhoneVerificationService(supabase, normalizePhone);
 const availability = createAvailabilityService({supabase});
+const pushNotifications = createPushNotificationService({supabase});
+app.locals.pushNotifications = pushNotifications;
 const checkout = createCheckoutService({ supabase, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee });
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "prilavok-backend" }));
@@ -171,6 +174,15 @@ app.post("/api/availability/snapshot",async(req,res)=>{
     if(result.error)return res.status(result.status||400).json({error:result.error});
     return res.json(result);
   }catch(error){console.error("POST /api/availability/snapshot:",error);return res.status(500).json({error:"Failed to store availability snapshot"})}
+});
+
+app.post("/api/devices/push-token",async(req,res)=>{
+  try{
+    const device=await requireDevice(req,res);if(!device)return;
+    const result=await pushNotifications.register(device.id,req.body);
+    if(result.error)return res.status(result.status||400).json({error:result.error});
+    return res.json(result);
+  }catch(error){console.error("POST /api/devices/push-token:",error);return res.status(500).json({error:"Failed to register push token"})}
 });
 
 
