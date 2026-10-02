@@ -15,7 +15,7 @@
     const overlay=document.createElement('div');
     overlay.className='roulette-overlay';
     overlay.setAttribute('aria-hidden','true');
-    overlay.innerHTML='<div class="roulette-dialog" role="dialog" aria-modal="true" aria-labelledby="rouletteTitle"><button class="roulette-close" type="button" aria-label="Закрыть">×</button><div class="roulette-heading"><div class="roulette-kicker">Помощь с выбором</div><h2 id="rouletteTitle">Рулетка блюд</h2><p>Выберите категорию — мы предложим случайный доступный товар.</p></div><label class="roulette-label" for="rouletteCategory">Категория</label><select id="rouletteCategory" class="roulette-select"></select><div class="roulette-stage" aria-live="polite"><span class="roulette-pointer" aria-hidden="true"></span><div class="roulette-wheel" aria-hidden="true"></div><div class="roulette-readout"><span class="roulette-readout-label">Ваш выбор</span><strong>Готовы?</strong><small>Нажмите «Крутить»</small></div></div><div class="roulette-actions"><button class="roulette-spin" type="button">Крутить</button><button class="roulette-view" type="button" hidden>Открыть товар</button></div></div>';
+    overlay.innerHTML='<div class="roulette-dialog" role="dialog" aria-modal="true" aria-labelledby="rouletteTitle"><button class="roulette-close" type="button" aria-label="Закрыть">×</button><div class="roulette-heading"><div class="roulette-kicker">Помощь с выбором</div><h2 id="rouletteTitle">Рулетка</h2><p>Выберите категорию — мы предложим случайный доступный товар.</p></div><label class="roulette-label" for="rouletteCategory">Категория</label><div class="roulette-select-wrap"><select id="rouletteCategory" class="roulette-select"></select></div><div class="roulette-stage" aria-live="polite"><span class="roulette-pointer" aria-hidden="true"></span><div class="roulette-wheel" aria-hidden="true"></div><div class="roulette-readout"><span class="roulette-readout-label">Ваш выбор</span><strong>Готовы?</strong><small>Нажмите «Крутить»</small></div></div><div class="roulette-actions"><button class="roulette-spin" type="button">Крутить</button><button class="roulette-view" type="button" hidden>Открыть товар</button></div></div>';
     document.body.appendChild(overlay);
     const dialog=overlay.querySelector('.roulette-dialog');
     const closeButton=overlay.querySelector('.roulette-close');
@@ -59,8 +59,8 @@
       result=null;viewButton.hidden=true;spinButton.disabled=true;spinButton.textContent='Выбираем…';wheel.classList.remove('is-spinning');void wheel.offsetWidth;wheel.classList.add('is-spinning');
       if(reduceMotion()){finish(items);return}
       let index=0;
-      cycleTimer=setInterval(()=>{const item=items[index++%items.length];readout.innerHTML='<span class="roulette-readout-label">Рулетка крутится</span><strong>'+escapeHtml(item.name)+'</strong><small>Ищем подходящий вариант</small>';},85);
-      finishTimer=setTimeout(()=>finish(items),1450);
+      cycleTimer=setInterval(()=>{const item=items[index++%items.length];readout.innerHTML='<strong>'+escapeHtml(item.name)+'</strong><small>Ищем подходящий вариант</small>';},130);
+      finishTimer=setTimeout(()=>finish(items),2600);
     };
 
     launch.addEventListener('click',open);
