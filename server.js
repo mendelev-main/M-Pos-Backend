@@ -16,7 +16,10 @@ const app = express();
 app.use(cors());
 app.use("/api/owner/report", express.json({ limit: "14mb" }));
 app.use(express.json({ limit: "2mb" }));
-app.use(express.static("public"));
+app.use(express.static("public",{setHeaders(res,filePath){
+  if(filePath.endsWith(".html"))res.setHeader("Cache-Control","no-cache");
+  else res.setHeader("Cache-Control","public, max-age=3600, stale-while-revalidate=86400");
+}}));
 
 const port = process.env.PORT || 3000;
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -316,6 +319,14 @@ app.get("/api/demand/status", async (_req,res) => demandStatusResponse(res));
 // Temporary compatibility route for already cached/older web clients. It performs no ETA calculation.
 app.post("/api/eta/estimate", async (_req,res) => demandStatusResponse(res));
 
+app.get("/api/menu/availability",async(_req,res)=>{
+  try{
+    const items=(await availability.list()).map(row=>({external_id:row.externalId,availability_known:true,available_quantity:row.quantity}));
+    res.setHeader?.("Cache-Control","no-store");
+    return res.json({items});
+  }catch(error){console.error("GET /api/menu/availability:",error);return res.status(500).json({error:"Failed to load availability"})}
+});
+
 app.get("/api/menu", async (req, res) => {
   try {
     const menuSurface = String(req.query?.surface || "").toLowerCase() === "menu";
@@ -331,6 +342,7 @@ app.get("/api/menu", async (req, res) => {
     const surfaceProducts = (products ?? []).filter(p => !p.category_id || allowedCategoryIds.has(p.category_id));
     const onlineCategoryIds = new Set(surfaceProducts.map(p => p.category_id).filter(Boolean));
     const availableProducts=await availability.attachToProducts(surfaceProducts);
+    res.setHeader?.("Cache-Control",menuSurface?"public, max-age=1800":"private, max-age=120");
     res.json({ categories: (categories ?? []).filter(c => onlineCategoryIds.has(c.id)), products: availableProducts });
   } catch (error) { console.error("GET /api/menu:", error); res.status(500).json({ error: "Failed to load menu" }); }
 });

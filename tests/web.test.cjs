@@ -41,16 +41,33 @@ test('online menu and online ordering use separate product visibility channels',
  assert.match(server,/available_online: c\.availableOnline !== false/);assert.match(server,/visible_in_menu: c\.visibleInOnlineMenu !== false/);
 });
 
+test('guest catalog cache is bounded and stock is forced fresh at checkout boundaries',()=>{
+ const order=fs.readFileSync(path.join(root,'public/index.html'),'utf8'),menu=fs.readFileSync(path.join(root,'public/menu/index.html'),'utf8'),server=fs.readFileSync(path.join(root,'server.js'),'utf8');
+ for(const html of [order,menu])assert.match(html,/<script src="\/guest-menu-cache\.js"><\/script>/);
+ assert.match(order,/MENU_CACHE_FRESH_MS=2\*60\*1000/);assert.match(menu,/MENU_CACHE_FRESH_MS=30\*60\*1000/);
+ assert.match(order,/fetch\(API\+'\/api\/menu\/availability',\{cache:'no-store'\}\)/);assert.match(order,/byExternalId/);
+ assert.match(server,/public, max-age=3600, stale-while-revalidate=86400/);assert.match(server,/filePath\.endsWith\("\.html"\).*no-cache/s);
+});
+
+test('availability refresh endpoint returns only the compact stock payload without caching',async()=>{
+ const routes={},app={use(){},get(path,handler){routes[path]=handler},put(){},patch(){},delete(){},post(){},listen(){}};const express=()=>app;express.json=()=>{};express.static=()=>{};
+ const context={console,express,cors:()=>{},mountOwnerRoutes(){},ownerBotAuthorized(){return true},createPhoneVerificationService:()=>({}),createCheckoutService:()=>({}),createAvailabilityService:()=>({list:async()=>[{externalId:'pizza',quantity:2},{externalId:'water',quantity:null}]}),calculateLoyaltyTransition(){},loyaltyIdempotencyKey(){},validateLoyaltyAllocation(){},randomUUID:()=>'',process:{env:{SUPABASE_URL:'test',SUPABASE_SERVICE_ROLE_KEY:'test'}},createClient:()=>({}),setInterval(){}};
+ vm.createContext(context);vm.runInContext(validation,context);vm.runInContext(fs.readFileSync(path.join(root,'server.js'),'utf8').replace(/^import .*;\n/gm,''),context);
+ const headers={};const response={setHeader(name,value){headers[name]=value},json(value){this.body=value;return this},status(value){this.code=value;return this}};await routes['/api/menu/availability']({},response);
+ assert.equal(headers['Cache-Control'],'no-store');assert.deepEqual(JSON.parse(JSON.stringify(response.body)),{items:[{external_id:'pizza',availability_known:true,available_quantity:2},{external_id:'water',availability_known:true,available_quantity:null}]});
+});
+
 test('menu endpoint selects the requested visibility column',async()=>{
  const routes={},filters=[];
  const app={use(){},get(path,handler){routes[path]=handler},put(){},patch(){},delete(){},post(){},listen(){}};const express=()=>app;express.json=()=>{};express.static=()=>{};
  const query=table=>{const q={select(){return q},eq(key,value){filters.push({table,key,value});return q},order(){return q},then(resolve){resolve({data:[],error:null})}};return q};
  const context={console,express,cors:()=>{},mountOwnerRoutes(){},ownerBotAuthorized(){return true},createPhoneVerificationService:()=>({}),createCheckoutService:()=>({}),createAvailabilityService:()=>({attachToProducts:async products=>products}),calculateLoyaltyTransition(){},loyaltyIdempotencyKey(){},validateLoyaltyAllocation(){},randomUUID:()=>'',process:{env:{SUPABASE_URL:'test',SUPABASE_SERVICE_ROLE_KEY:'test'}},createClient:()=>({from:query}),setInterval(){}};
  vm.createContext(context);vm.runInContext(validation,context);vm.runInContext(fs.readFileSync(path.join(root,'server.js'),'utf8').replace(/^import .*;\n/gm,''),context);
- const response={json(value){this.body=value;return this},status(value){this.code=value;return this}};
+ const cacheHeaders=[];const response={setHeader(name,value){if(name==='Cache-Control')cacheHeaders.push(value)},json(value){this.body=value;return this},status(value){this.code=value;return this}};
  await routes['/api/menu']({query:{}},response);await routes['/api/menu']({query:{surface:'menu'}},response);
  assert.deepEqual(filters.filter(row=>row.table==='products'&&row.key!=='is_active').map(row=>row.key),['available_online','visible_in_menu']);
  assert.deepEqual(filters.filter(row=>row.table==='categories'&&row.key!=='is_active').map(row=>row.key),['available_online','visible_in_menu']);
+ assert.deepEqual(cacheHeaders,['private, max-age=120','public, max-age=1800']);
 });
 
 test('menu endpoint removes products whose category is hidden on the requested surface',async()=>{
