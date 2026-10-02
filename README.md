@@ -86,7 +86,8 @@ app.post("/api/menu/sync", async (req, res) => {
           category_id: categoryMap.get(categoryExternalId) || null,
           sort_order: Number.isFinite(Number(p.sortOrder)) ? Number(p.sortOrder) : index,
           is_active: p.isActive !== false,
-          available_online: p.availableOnline !== false
+          available_online: p.availableOnline !== false,
+          visible_in_menu: p.visibleInOnlineMenu !== false
         };
       })
       .filter(p => p.external_id && p.name);
@@ -169,6 +170,18 @@ Backend хранит snapshot отдельно от резервов подтв�
 После оплаты WEB-заказа POS включает backend ID заказа в `settledWebOrderIds`. Новый физический snapshot
 уже учитывает продажу, поэтому backend одновременно закрывает соответствующий резерв и не вычитает
 заказ второй раз. После перезапуска POS восстанавливает эти ID из существующей истории оплаченных чеков.
+
+## Онлайн заказ и онлайн меню
+
+POS передаёт два независимых признака товара только при ручной синхронизации каталога:
+
+- `availableOnline` → `products.available_online`: товар доступен на странице оформления заказа;
+- `visibleInOnlineMenu` → `products.visible_in_menu`: товар показывается в отдельном меню для просмотра.
+
+Страница заказа использует `GET /api/menu`, а меню — `GET /api/menu?surface=menu`. Поле `description`
+общее для обеих карточек. Перед выкладкой этой версии нужно применить
+`supabase/migrations/20261002230000_product_online_channels.sql`. До применения миграции backend
+сохраняет прежнее поведение: синхронизация и меню временно используют `available_online`.
 
 Перед выкладкой server-кода нужно применить
 `supabase/migrations/20261002153000_event_driven_availability.sql`. Миграция добавляет

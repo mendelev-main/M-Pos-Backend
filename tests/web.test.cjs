@@ -32,3 +32,21 @@ test('guest pages share full-width shell and one animated sold-out treatment',()
 test('guest branding and product controls use shared visual tokens',()=>{const order=fs.readFileSync(path.join(root,'public/index.html'),'utf8'),menu=fs.readFileSync(path.join(root,'public/menu/index.html'),'utf8'),shell=fs.readFileSync(path.join(root,'public/guest-shell.css'),'utf8');assert.match(order,/<title>Проект<\/title>/);assert.match(menu,/<title>Проект<\/title>/);assert.match(shell,/--guest-control-radius:999px/);assert.match(shell,/--guest-card-radius:24px/);assert.match(shell,/\.site-top \.brand,\.top \.brand/);assert.match(shell,/\.add,\.unavailable\{[^}]*min-height:42px/);assert.match(shell,/\.product-wrap \.unavailable\{margin-top:12px/);});
 
 test('product roulette is shared, category-aware and excludes unavailable products',()=>{const order=fs.readFileSync(path.join(root,'public/index.html'),'utf8'),menu=fs.readFileSync(path.join(root,'public/menu/index.html'),'utf8'),roulette=fs.readFileSync(path.join(root,'public/guest-roulette.js'),'utf8'),shell=fs.readFileSync(path.join(root,'public/guest-shell.css'),'utf8');for(const html of [order,menu]){assert.match(html,/id="rouletteLaunch"/);assert.match(html,/<script src="\/guest-roulette\.js"><\/script>/);assert.match(html,/GuestRoulette\?\.mount/)}assert.match(roulette,/options\.isAvailable\(product\)/);assert.match(roulette,/String\(product\.category_id\)===String\(categoryId\)/);assert.match(roulette,/crypto\?\.getRandomValues/);assert.match(roulette,/Открыть товар/);assert.match(roulette,/finishTimer=setTimeout\(\(\)=>finish\(items\),2600\)/);assert.doesNotMatch(roulette,/Рулетка блюд|Рулетка крутится/);assert.match(shell,/\.roulette-select-wrap::after/);assert.match(shell,/\.cartbar::after\{[^}]*height:calc\(120px \+ env\(safe-area-inset-bottom\)\)/);assert.doesNotThrow(()=>new Function(roulette));});
+
+test('online menu and online ordering use separate product visibility channels',()=>{
+ const order=fs.readFileSync(path.join(root,'public/index.html'),'utf8'),menu=fs.readFileSync(path.join(root,'public/menu/index.html'),'utf8'),server=fs.readFileSync(path.join(root,'server.js'),'utf8');
+ assert.match(order,/fetch\(API\+'\/api\/menu'/);assert.match(menu,/fetch\('\/api\/menu\?surface=menu'/);
+ assert.match(server,/visible_in_menu: p\.visibleInOnlineMenu !== false/);assert.match(server,/menuSurface \? "visible_in_menu" : "available_online"/);
+ assert.match(server,/missingOnlineMenuColumn/);assert.match(server,/withoutOnlineMenuColumn/);
+});
+
+test('menu endpoint selects the requested visibility column',async()=>{
+ const routes={},filters=[];
+ const app={use(){},get(path,handler){routes[path]=handler},put(){},patch(){},delete(){},post(){},listen(){}};const express=()=>app;express.json=()=>{};express.static=()=>{};
+ const query=table=>{const q={select(){return q},eq(key,value){filters.push({table,key,value});return q},order(){return q},then(resolve){resolve({data:[],error:null})}};return q};
+ const context={console,express,cors:()=>{},mountOwnerRoutes(){},ownerBotAuthorized(){return true},createPhoneVerificationService:()=>({}),createCheckoutService:()=>({}),createAvailabilityService:()=>({attachToProducts:async products=>products}),calculateLoyaltyTransition(){},loyaltyIdempotencyKey(){},validateLoyaltyAllocation(){},randomUUID:()=>'',process:{env:{SUPABASE_URL:'test',SUPABASE_SERVICE_ROLE_KEY:'test'}},createClient:()=>({from:query}),setInterval(){}};
+ vm.createContext(context);vm.runInContext(validation,context);vm.runInContext(fs.readFileSync(path.join(root,'server.js'),'utf8').replace(/^import .*;\n/gm,''),context);
+ const response={json(value){this.body=value;return this},status(value){this.code=value;return this}};
+ await routes['/api/menu']({query:{}},response);await routes['/api/menu']({query:{surface:'menu'}},response);
+ assert.deepEqual(filters.filter(row=>row.table==='products'&&row.key!=='is_active').map(row=>row.key),['available_online','visible_in_menu']);
+});

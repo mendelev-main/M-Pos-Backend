@@ -34,6 +34,15 @@ const phoneVerification = createPhoneVerificationService(supabase, normalizePhon
 const availability = createAvailabilityService({supabase});
 const checkout = createCheckoutService({ supabase, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee });
 
+function missingOnlineMenuColumn(error) {
+  const message = String(error?.message || error?.details || "").toLowerCase();
+  return ["42703", "PGRST204"].includes(String(error?.code || "")) && message.includes("visible_in_menu");
+}
+
+function withoutOnlineMenuColumn(rows) {
+  return rows.map(({ visible_in_menu: _visibleInMenu, ...row }) => row);
+}
+
 app.get("/health", (_req, res) => res.json({ ok: true, service: "prilavok-backend" }));
 
 app.post("/api/checkout", async (req, res) => {
@@ -154,8 +163,12 @@ app.post("/api/menu/sync", async (req, res) => {
     if (staleCategoryIds.length) { const { error } = await supabase.from("categories").update({ is_active: false }).in("id", staleCategoryIds); if (error) throw error; }
     const categoryMap = new Map();
     if (externalIds.length) { const { data: dbCategories, error } = await supabase.from("categories").select("id,external_id").in("external_id", externalIds); if (error) throw error; for (const c of dbCategories || []) categoryMap.set(c.external_id, c.id); }
-    const productRows = products.map((p, index) => { const categoryName = String(p.category || "Без категории").trim() || "Без категории"; return { external_id: String(p.externalId || ""), name: String(p.name || "").trim(), description: p.description ? String(p.description) : null, price: Number(p.price || 0), category_id: categoryMap.get(`category:${categoryName}`) || null, sort_order: Number.isFinite(Number(p.sortOrder)) ? Number(p.sortOrder) : index, is_active: p.isActive !== false, available_online: p.availableOnline !== false, image_url: p.imageUrl ? String(p.imageUrl) : null }; }).filter(p => p.external_id && p.name);
-    if (productRows.length) { const { error } = await supabase.from("products").upsert(productRows, { onConflict: "external_id" }); if (error) throw error; }
+    const productRows = products.map((p, index) => { const categoryName = String(p.category || "Без категории").trim() || "Без категории"; return { external_id: String(p.externalId || ""), name: String(p.name || "").trim(), description: p.description ? String(p.description) : null, price: Number(p.price || 0), category_id: categoryMap.get(`category:${categoryName}`) || null, sort_order: Number.isFinite(Number(p.sortOrder)) ? Number(p.sortOrder) : index, is_active: p.isActive !== false, available_online: p.availableOnline !== false, visible_in_menu: p.visibleInOnlineMenu !== false, image_url: p.imageUrl ? String(p.imageUrl) : null }; }).filter(p => p.external_id && p.name);
+    if (productRows.length) {
+      let { error } = await supabase.from("products").upsert(productRows, { onConflict: "external_id" });
+      if (missingOnlineMenuColumn(error)) ({ error } = await supabase.from("products").upsert(withoutOnlineMenuColumn(productRows), { onConflict: "external_id" }));
+      if (error) throw error;
+    }
     const { data: existingProducts, error: existingProductsError } = await supabase.from("products").select("id,external_id");
     if (existingProductsError) throw existingProductsError;
     const productExternalIdSet = new Set(productRows.map(p => p.external_id));
@@ -289,11 +302,14 @@ app.get("/api/demand/status", async (_req,res) => demandStatusResponse(res));
 // Temporary compatibility route for already cached/older web clients. It performs no ETA calculation.
 app.post("/api/eta/estimate", async (_req,res) => demandStatusResponse(res));
 
-app.get("/api/menu", async (_req, res) => {
+app.get("/api/menu", async (req, res) => {
   try {
     const { data: categories, error: categoriesError } = await supabase.from("categories").select("id,name,color,sort_order,is_active,external_id").eq("is_active", true).order("sort_order", { ascending: true }).order("name", { ascending: true });
     if (categoriesError) throw categoriesError;
-    const { data: products, error: productsError } = await supabase.from("products").select("id,name,description,price,category_id,image_url,sort_order,is_active,available_online,external_id").eq("is_active", true).eq("available_online", true).order("sort_order", { ascending: true }).order("name", { ascending: true });
+    const menuSurface = String(req.query?.surface || "").toLowerCase() === "menu";
+    const loadProducts = visibilityColumn => supabase.from("products").select("id,name,description,price,category_id,image_url,sort_order,is_active,available_online,external_id").eq("is_active", true).eq(visibilityColumn, true).order("sort_order", { ascending: true }).order("name", { ascending: true });
+    let { data: products, error: productsError } = await loadProducts(menuSurface ? "visible_in_menu" : "available_online");
+    if (menuSurface && missingOnlineMenuColumn(productsError)) ({ data: products, error: productsError } = await loadProducts("available_online"));
     if (productsError) throw productsError;
     const onlineCategoryIds = new Set((products ?? []).map(p => p.category_id).filter(Boolean));
     const availableProducts=await availability.attachToProducts(products??[]);
