@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Меню — Прилавок</title>
+<title>Проект</title>
 <style>
 :root{--bg:#f6f6f4;--card:#fff;--text:#171717;--muted:#777;--line:#e8e8e5;--accent:#171717;--accentText:#fff;--soft:#efefec;--radius:20px}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
@@ -59,11 +59,11 @@ body{background:var(--bg);color:var(--text)}
 </div>
 <div id="productDetail" class="product-detail"><div class="detail-inner"><div class="detail-top"><button class="back-btn" onclick="closeProductDetail()">← Назад</button><div class="brand">Проект</div></div><div id="detailContent"></div></div></div>
 <div id="cartbar" class="cartbar"><button class="cartbtn" onclick="openCart()"><span>Корзина · <span id="cartCount">0</span></span><span id="cartTotal">0,00 BYN</span></button></div>
-<div id="cartModal" class="modal" onclick="if(event.target===this)closeCart()"><div class="sheet"><div class="handle"></div><h2>Ваш заказ</h2><div id="cartItems"></div><div class="section"><label>Способ получения</label><div class="switches"><button id="pickupBtn" class="switch active" onclick="setType('Самовывоз')">🏠 Самовывоз</button><button id="deliveryBtn" class="switch" onclick="setType('Доставка')">🚗 Доставка</button></div></div><div id="deliveryFields" class="section" style="display:none"><label>Данные для доставки</label><input id="name" class="field" placeholder="Имя"><div class="phone-field"><span class="phone-prefix">+375</span><input id="phone" type="tel" inputmode="tel" autocomplete="tel-national" aria-label="Телефон, код страны +375" placeholder="29 123 45 67" oninput="formatPhoneInput(this)"></div><input id="address" class="field" placeholder="Адрес доставки"><input id="comment" class="field" placeholder="Комментарий к заказу"><div class="muted" style="font-size:13px"><span id="deliveryFeeText">Стоимость доставки будет рассчитана администратором</span></div></div><div id="pickupFields" class="section"><label>Контактные данные</label><input id="namePickup" class="field" placeholder="Имя"><div class="phone-field"><span class="phone-prefix">+375</span><input id="phonePickup" type="tel" inputmode="tel" autocomplete="tel-national" aria-label="Телефон, код страны +375" placeholder="29 123 45 67" oninput="formatPhoneInput(this)"></div><input id="commentPickup" class="field" placeholder="Комментарий к заказу"></div><div id="demandCard" class="demand-card" aria-live="polite" style="display:none"></div><div class="total"><span>Итого</span><span id="checkoutTotal">0,00 BYN</span></div><button id="submitBtn" class="checkout" onclick="submitOrder()">Оформить заказ</button></div></div>
+<div id="cartModal" class="modal" onclick="if(event.target===this)closeCart()"><div class="sheet"><div class="handle"></div><h2>Ваш заказ</h2><div id="cartItems"></div><div class="section"><label>Способ получения</label><div class="switches"><button id="pickupBtn" class="switch active" onclick="setType('Самовывоз')">🏠 Самовывоз</button><button id="deliveryBtn" class="switch" onclick="setType('Доставка')">🚗 Доставка</button></div></div><div id="deliveryFields" class="section" style="display:none"><label>Данные для доставки</label><input id="name" class="field" placeholder="Имя"><div class="phone-field"><span class="phone-prefix">+375</span><input id="phone" type="tel" inputmode="tel" autocomplete="tel-national" aria-label="Телефон, код страны +375" placeholder="29 123 45 67" oninput="formatPhoneInput(this)"></div><input id="address" class="field" placeholder="Адрес доставки"><input id="comment" class="field" placeholder="Комментарий к заказу"><div class="muted" style="font-size:13px"><span id="deliveryFeeText">Стоимость доставки будет рассчитана администратором</span></div></div><div id="pickupFields" class="section"><label>Контактные данные</label><input id="namePickup" class="field" placeholder="Имя"><div class="phone-field"><span class="phone-prefix">+375</span><input id="phonePickup" type="tel" inputmode="tel" autocomplete="tel-national" aria-label="Телефон, код страны +375" placeholder="29 123 45 67" oninput="formatPhoneInput(this)"></div><input id="commentPickup" class="field" placeholder="Комментарий к заказу"></div><div id="demandCard" class="demand-card is-normal" aria-live="polite" style="display:none"><div class="demand-title">Загруженность заведения</div><div class="demand-status">Обычная загруженность</div><div class="demand-note">Ваш заказ постараются приготовить быстро</div></div><div class="total"><span>Итого</span><span id="checkoutTotal">0,00 BYN</span></div><button id="submitBtn" class="checkout" onclick="submitOrder()">Оформить заказ</button></div></div>
 <div id="toast" class="toast"></div>
 <script src="/order-validation.js"></script>
 <script>
-const API=location.origin;let menu={categories:[],products:[]};let cart=[];let activeCat=null;let orderType='Самовывоз';let demandTimer=null,demandRefreshTimer=null,demandController=null,demandSeq=0;const DEMAND_REFRESH_MS=25000;
+const API=location.origin;let menu={categories:[],products:[]};let cart=[];let activeCat=null;let orderType='Самовывоз';let demandTimer=null,demandRefreshTimer=null,demandController=null,demandSeq=0;const DEMAND_REFRESH_MS=25000;window.__DEMAND_LAST={available:true,demandState:'NORMAL',overload:false};
 const money=n=>Number(n||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})+' BYN';
 function productLimit(p){if(p?.availability_known!==true)return 0;if(p.available_quantity===null)return Infinity;return Math.max(0,Math.floor(Number(p.available_quantity)||0))}
 function reconcileCartAvailability(announce=false){let changed=false;cart=cart.flatMap(item=>{const p=menu.products.find(product=>product.id===item.id),limit=productLimit(p);if(!p||limit<=0){changed=true;return []}if(item.qty>limit){changed=true;return [{...item,qty:limit}]}return [item]});if(changed&&announce)toast('Корзина обновлена по актуальным остаткам');return changed}
@@ -88,15 +88,17 @@ function renderDemandStatus(data){
   el.style.display='block';
   el.className='demand-card';
   if(!cart.length){el.style.display='none';return}el.style.display='block';
-  if(data===undefined){el.classList.remove('is-loading');el.style.display='none';el.innerHTML='';return}
-  if(!data?.available){el.classList.add('is-unavailable');el.innerHTML='<div class="demand-title">Загрузка</div><div class="demand-status">Статус загрузки временно недоступен</div>';return}
+  if(data===undefined)data={available:true,demandState:'NORMAL',overload:false};
+  if(!data?.available){el.classList.add('is-unavailable');el.innerHTML='<div class="demand-title">Загруженность заведения</div><div class="demand-status">Статус загруженности временно недоступен</div>';return}
   if(data.overload===true||data.demandState==='OVERLOAD'){
     el.classList.add('is-busy');
-    el.innerHTML='<div class="demand-title">Повышенный спрос</div><div class="demand-status">Время приготовления заказа увеличено</div>';
+    el.innerHTML='<div class="demand-title">Загруженность заведения</div><div class="demand-status">Повышенная загруженность</div><div class="demand-note">Заказ может готовиться дольше обычного</div>';
     return;
   }
-  el.classList.add('is-normal');el.innerHTML='<div class="demand-title">Загрузка</div><div class="demand-status">Обычная загрузка</div>';
+  el.classList.add('is-normal');el.innerHTML='<div class="demand-title">Загруженность заведения</div><div class="demand-status">Обычная загруженность</div><div class="demand-note">Ваш заказ постараются приготовить быстро</div>';
 }
+
+async function preloadDemandStatus(){try{const r=await fetch(API+'/api/demand/status',{cache:'no-store'});const data=await r.json();if(!r.ok)throw new Error();window.__DEMAND_LAST=data}catch(_e){window.__DEMAND_LAST={available:false}}}
 
 function armDemandRefresh(){
   clearTimeout(demandRefreshTimer);demandRefreshTimer=null;
@@ -105,12 +107,12 @@ function armDemandRefresh(){
 }
 function scheduleDemandStatus({quiet=false}={}){
   clearTimeout(demandTimer);clearTimeout(demandRefreshTimer);demandRefreshTimer=null;demandController?.abort();demandController=null;demandSeq++;
-  if(!cart.length){window.__DEMAND_LAST=null;renderDemandStatus(null);return}
+  if(!cart.length){const el=document.getElementById('demandCard');if(el)el.style.display='none';return}
   if(document.getElementById('cartModal')?.style.display!=='flex')return;
-  const seq=demandSeq;if(!quiet)renderDemandStatus(undefined);
+  const seq=demandSeq;
   demandTimer=setTimeout(async()=>{demandController=new AbortController();try{const r=await fetch(API+'/api/demand/status',{cache:'no-store',signal:demandController.signal});const d=await r.json();if(seq!==demandSeq)return;if(!r.ok)throw new Error(d?.error||'Demand status error');renderDemandStatus(d)}catch(e){if(e?.name!=='AbortError'&&seq===demandSeq)renderDemandStatus({available:false})}finally{if(seq===demandSeq){demandController=null;armDemandRefresh()}}},quiet?0:220);
 }
-function openCart(){const m=document.getElementById('cartModal');m.style.display='flex';document.body.style.overflow='hidden';window.__DEMAND_LAST=undefined;renderCart();void refreshMenuAvailability({announce:true})}function closeCart(){demandSeq++;clearTimeout(demandTimer);clearTimeout(demandRefreshTimer);demandRefreshTimer=null;demandController?.abort();demandController=null;const m=document.getElementById('cartModal');m.style.display='none';document.body.style.overflow='';const sh=m.querySelector('.sheet');if(sh){sh.style.transition='';sh.style.transform=''}}
+function openCart(){const m=document.getElementById('cartModal');m.style.display='flex';document.body.style.overflow='hidden';renderCart();void refreshMenuAvailability({announce:true})}function closeCart(){demandSeq++;clearTimeout(demandTimer);clearTimeout(demandRefreshTimer);demandRefreshTimer=null;demandController?.abort();demandController=null;const m=document.getElementById('cartModal');m.style.display='none';document.body.style.overflow='';const sh=m.querySelector('.sheet');if(sh){sh.style.transition='';sh.style.transform=''}}
 document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(demandRefreshTimer);demandRefreshTimer=null}else if(document.getElementById('cartModal')?.style.display==='flex'&&cart.length)scheduleDemandStatus({quiet:true})});
 window.addEventListener('online',()=>{if(document.getElementById('cartModal')?.style.display==='flex'&&cart.length)scheduleDemandStatus({quiet:true})});
 let cartDragStartY=0,cartDragY=0,cartDragging=false,cartDragPointer=null;
@@ -130,6 +132,6 @@ async function submitOrder(){if(!cart.length)return;const btn=document.getElemen
 function formatPhoneInput(input){let value=input.value.trim();if(/^\+375/.test(value))value=value.slice(4);else if(/^375[\s(\d-]/.test(value)&&value.replace(/\D/g,'').length===12)value=value.slice(3);input.value=value.replace(/\D/g,'').slice(0,9);}
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.style.display='block';clearTimeout(window.__toast);window.__toast=setTimeout(()=>e.style.display='none',2800)}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}function escAttr(s){return esc(s)}
-fetch(API+'/api/config').then(r=>r.json()).then(c=>{window.__DELIVERY_FEE=Number(c.deliveryFee||0)}).catch(()=>{});loadMenu();
+fetch(API+'/api/config').then(r=>r.json()).then(c=>{window.__DELIVERY_FEE=Number(c.deliveryFee||0)}).catch(()=>{});void preloadDemandStatus();loadMenu();
 </script>
 </body></html>
