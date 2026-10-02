@@ -1,7 +1,7 @@
 (function(root){
   const VERSION=1;
   const PREFIX='project_guest_menu_cache_v1:';
-  const MAX_AGE_MS=24*60*60*1000;
+  const MAX_AGE_MS=7*24*60*60*1000;
 
   function validMenu(value){
     return Boolean(value&&Array.isArray(value.categories)&&Array.isArray(value.products));

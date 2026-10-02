@@ -2,12 +2,13 @@ import express from "express";
 import { mountOwnerRoutes, ownerBotAuthorized } from "./owner-auth.js";
 import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createPhoneVerificationService } from "./phone-verification.js";
 import { createCheckoutService } from "./checkout-service.js";
 import { createAvailabilityService } from "./availability-service.js";
 import { calculateLoyaltyTransition, loyaltyIdempotencyKey } from "./loyalty-engine.js";
 import { validateLoyaltyAllocation } from "./loyalty-allocation.js";
+import { closedPageHtml, isOrderingOpen, isSiteSleepWindow, millisecondsUntilSiteWake, VENUE_TIME_ZONE } from "./business-hours.js";
 
 import "./public/order-validation.js";
 const { validate: validateOrderContact, normalizePhone } = globalThis.OrderValidation;
@@ -16,6 +17,13 @@ const app = express();
 app.use(cors());
 app.use("/api/owner/report", express.json({ limit: "14mb" }));
 app.use(express.json({ limit: "2mb" }));
+app.use((req,res,next)=>{
+  if(!isSiteSleepWindow())return next();
+  const retrySeconds=Math.ceil(millisecondsUntilSiteWake()/1000),path=String(req.path||"");
+  if(req.method==="GET"&&(path==="/"||path==="/menu"||path==="/menu/")){res.setHeader("Cache-Control","no-store");res.setHeader("Retry-After",String(retrySeconds));return res.status(503).type("html").send(closedPageHtml())}
+  if(req.method==="GET"&&(path==="/api/menu"||path==="/api/menu/availability")){res.setHeader("Cache-Control","no-store");res.setHeader("Retry-After",String(retrySeconds));return res.status(503).json({error:"Сайт доступен с 06:00",opensAt:"06:00",timeZone:VENUE_TIME_ZONE})}
+  return next();
+});
 app.use(express.static("public",{setHeaders(res,filePath){
   if(filePath.endsWith(".html"))res.setHeader("Cache-Control","no-cache");
   else res.setHeader("Cache-Control","public, max-age=3600, stale-while-revalidate=86400");
@@ -25,6 +33,8 @@ const port = process.env.PORT || 3000;
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const deliveryFee = Number(process.env.DELIVERY_FEE || 0);
+const siteSleepingNow=()=>typeof isSiteSleepWindow==="function"&&isSiteSleepWindow();
+const orderingOpenNow=()=>typeof isOrderingOpen!=="function"||isOrderingOpen();
 
 if (!supabaseUrl || !supabaseKey) {
   console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
@@ -32,6 +42,9 @@ if (!supabaseUrl || !supabaseKey) {
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
+const newRevisionId=()=>typeof randomUUID==="function"?randomUUID().slice(0,8):"test";
+let catalogRevision=`boot-${Date.now().toString(36)}-${newRevisionId()}`;
+function advanceCatalogRevision(){catalogRevision=`sync-${Date.now().toString(36)}-${newRevisionId()}`;return catalogRevision}
 mountOwnerRoutes(app,{db:supabase});
 const phoneVerification = createPhoneVerificationService(supabase, normalizePhone);
 const availability = createAvailabilityService({supabase});
@@ -60,6 +73,7 @@ app.get("/health", (_req, res) => res.json({ ok: true, service: "prilavok-backen
 
 app.post("/api/checkout", async (req, res) => {
   try {
+    if(!orderingOpenNow())return res.status(503).json({error:"Онлайн-заказы принимаются с 10:00 до 23:00",opensAt:"10:00",closesAt:"23:00",timeZone:VENUE_TIME_ZONE});
     const result = await checkout.create(req.body);
     if (result.error) return res.status(result.status || 400).json({ error: result.error });
     return res.status(201).json(result);
@@ -149,9 +163,10 @@ app.post("/api/media/upload", async (req, res) => {
     }
     const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
     const path = `products/${encodeURIComponent(productId)}.${ext}`;
-    const upload = await fetch(`${supabaseUrl}/storage/v1/object/${bucket}/${path}`, { method: "POST", headers: { Authorization: `Bearer ${supabaseKey}`, apikey: supabaseKey, "Content-Type": mime, "x-upsert": "true" }, body: buffer });
+    const upload = await fetch(`${supabaseUrl}/storage/v1/object/${bucket}/${path}`, { method: "POST", headers: { Authorization: `Bearer ${supabaseKey}`, apikey: supabaseKey, "Content-Type": mime, "cache-control": "max-age=604800", "x-upsert": "true" }, body: buffer });
     if (!upload.ok) throw new Error(`Storage upload: ${upload.status} ${await upload.text()}`);
-    return res.json({ ok: true, url: `${supabaseUrl}/storage/v1/object/public/${bucket}/${path}` });
+    const imageVersion=createHash("sha256").update(buffer).digest("hex").slice(0,16);
+    return res.json({ ok: true, url: `${supabaseUrl}/storage/v1/object/public/${bucket}/${path}?v=${imageVersion}` });
   } catch (error) {
     console.error("POST /api/media/upload:", error);
     return res.status(500).json({ error: "Failed to upload image" });
@@ -191,7 +206,8 @@ app.post("/api/menu/sync", async (req, res) => {
     const productExternalIdSet = new Set(productRows.map(p => p.external_id));
     const staleProductIds = (existingProducts || []).filter(p => p.external_id && !productExternalIdSet.has(p.external_id)).map(p => p.id);
     if (staleProductIds.length) { const { error } = await supabase.from("products").update({ is_active: false, available_online: false }).in("id", staleProductIds); if (error) throw error; }
-    return res.json({ ok: true, deviceId: device?.id || null, categories: categoryRows.length, products: productRows.length, syncedAt: new Date().toISOString() });
+    const revision=advanceCatalogRevision();
+    return res.json({ ok: true, deviceId: device?.id || null, categories: categoryRows.length, products: productRows.length, syncedAt: new Date().toISOString(),catalogRevision:revision });
   } catch (error) { console.error("POST /api/menu/sync:", error); return res.status(500).json({ error: "Failed to sync menu" }); }
 });
 
@@ -323,7 +339,7 @@ app.get("/api/menu/availability",async(_req,res)=>{
   try{
     const items=(await availability.list()).map(row=>({external_id:row.externalId,availability_known:true,available_quantity:row.quantity}));
     res.setHeader?.("Cache-Control","no-store");
-    return res.json({items});
+    return res.json({catalog_revision:catalogRevision,items});
   }catch(error){console.error("GET /api/menu/availability:",error);return res.status(500).json({error:"Failed to load availability"})}
 });
 
@@ -342,13 +358,20 @@ app.get("/api/menu", async (req, res) => {
     const surfaceProducts = (products ?? []).filter(p => !p.category_id || allowedCategoryIds.has(p.category_id));
     const onlineCategoryIds = new Set(surfaceProducts.map(p => p.category_id).filter(Boolean));
     const availableProducts=await availability.attachToProducts(surfaceProducts);
-    res.setHeader?.("Cache-Control",menuSurface?"public, max-age=1800":"private, max-age=120");
-    res.json({ categories: (categories ?? []).filter(c => onlineCategoryIds.has(c.id)), products: availableProducts });
+    const versioned=String(req.query?.revision||"")===catalogRevision;
+    res.setHeader?.("Cache-Control",versioned?(menuSurface?"public, max-age=604800, immutable":"private, max-age=604800, immutable"):(menuSurface?"public, max-age=1800":"private, max-age=120"));
+    res.setHeader?.("X-Catalog-Revision",catalogRevision);
+    res.json({ catalog_revision:catalogRevision,categories: (categories ?? []).filter(c => onlineCategoryIds.has(c.id)), products: availableProducts });
   } catch (error) { console.error("GET /api/menu:", error); res.status(500).json({ error: "Failed to load menu" }); }
 });
 
 const eventClients = new Set(); let eventPollBusy = false;
 async function pushNewOrders(){
+  if(typeof isSiteSleepWindow==="function"&&isSiteSleepWindow()){
+    const retry=Math.ceil(millisecondsUntilSiteWake());
+    for(const client of eventClients){try{client.res.write(`retry: ${retry}\nevent: sleeping\ndata: {}\n\n`);client.res.end()}catch(_error){}}
+    eventClients.clear();return;
+  }
   if(eventPollBusy || !eventClients.size) return; eventPollBusy = true;
   try { const { data, error } = await supabase.from("orders").select("id,external_id,status,order_type,customer_id,customer_name,phone,address,comment,total,delivery_fee,created_at,updated_at,order_items(id,product_id,external_product_id,product_name,price,quantity,comment)").eq("status", "new").order("created_at", { ascending: false }).limit(20); if(error) throw error; const payload = JSON.stringify({type:"orders",orders:data||[]}); for(const client of eventClients){ try { client.res.write(`data: ${payload}\n\n`); } catch(e) {} } }
   catch(error){ console.error("order event poll:", error); } finally { eventPollBusy = false; }
@@ -357,6 +380,7 @@ setInterval(pushNewOrders, 2000);
 
 app.get("/api/orders/events", async (req, res) => {
   try {
+    if(siteSleepingNow()){res.setHeader("Content-Type","text/event-stream; charset=utf-8");res.setHeader("Cache-Control","no-store");res.write(`retry: ${Math.ceil(millisecondsUntilSiteWake())}\nevent: sleeping\ndata: {}\n\n`);return res.end()}
     const deviceKey = String(req.header("x-device-key") || req.query.deviceKey || "").trim();
     if(!deviceKey) return res.status(401).json({error:"Missing device key"});
     const { data: device, error } = await supabase.from("devices").select("id").eq("device_key", deviceKey).eq("is_active", true).maybeSingle();
@@ -433,7 +457,7 @@ app.get("/api/customers/:id/orders",async(req,res)=>{try{if(!await requireDevice
 app.get("/api/customers/:id/ledger",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {data,error}=await supabase.from("loyalty_ledger").select("id,program_id,operation_type,progress_delta,reward_delta,metadata,created_at,loyalty_programs(name)").eq("customer_id",req.params.id).order("created_at",{ascending:false}).limit(100);if(error)throw error;res.json({ledger:data||[]});}catch(e){console.error("loyalty ledger",e);res.status(500).json({error:"Failed to load loyalty ledger"})}});
 app.post("/api/customers/:id/loyalty-adjustment",async(req,res)=>{try{if(!await requireDevice(req,res))return;const programId=String(req.body?.programId||"").trim(),reason=String(req.body?.reason||"").trim(),adminEmployeeId=String(req.body?.adminEmployeeId||"").trim(),adminEmployeeName=String(req.body?.adminEmployeeName||"").trim(),adminPassword=String(req.body?.adminPassword||""),progressDelta=Math.trunc(Number(req.body?.progressDelta)||0),rewardDelta=Math.trunc(Number(req.body?.rewardDelta)||0);if(!process.env.POS_ADMIN_PASSWORD||adminPassword!==process.env.POS_ADMIN_PASSWORD)return res.status(403).json({error:"Administrator authorization required"});if(!programId||!reason||!adminEmployeeId||!adminEmployeeName||(!progressDelta&&!rewardDelta))return res.status(400).json({error:"Program, reason, administrator and adjustment are required"});const key=`manual:${req.params.id}:${programId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;const {error}=await supabase.from("loyalty_ledger").insert({customer_id:req.params.id,program_id:programId,operation_type:"MANUAL_ADJUSTMENT",progress_delta:progressDelta,reward_delta:rewardDelta,idempotency_key:key,metadata:{reason,adminEmployeeId,adminEmployeeName}});if(error)throw error;res.json({ok:true,programs:await customerLoyalty(req.params.id)});}catch(e){console.error("loyalty adjustment",e);res.status(500).json({error:"Failed to adjust loyalty"})}});
 
-app.get("/api/config", (_req, res) => res.json({ deliveryFee: Number.isFinite(deliveryFee) ? deliveryFee : 0 }));
+app.get("/api/config", (_req, res) => res.json({ deliveryFee: Number.isFinite(deliveryFee) ? deliveryFee : 0,orderingOpen:orderingOpenNow(),orderHours:{opensAt:"10:00",closesAt:"23:00",timeZone:VENUE_TIME_ZONE} }));
 
 app.post("/api/orders", async (req, res) => {
   try {

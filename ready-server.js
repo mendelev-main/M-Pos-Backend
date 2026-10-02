@@ -1,6 +1,7 @@
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import { readFile } from "node:fs/promises";
+import { closedPageHtml, isSiteSleepWindow, millisecondsUntilSiteWake } from "./business-hours.js";
 
 let runningApp = null;
 const originalListen = express.application.listen;
@@ -80,6 +81,7 @@ async function sendCustomerTelegram(chatId,text) {
 // new -> Заказ создан, accepted -> Заказ подтвержден, ready -> Заказ готов.
 runningApp.get("/", async (_req, res) => {
   try {
+    if(isSiteSleepWindow()){res.setHeader("Cache-Control","no-store");res.setHeader("Retry-After",String(Math.ceil(millisecondsUntilSiteWake()/1000)));return res.status(503).type("html").send(closedPageHtml())}
     let html = await readFile(new URL("./public/index.html", import.meta.url), "utf8");
     const oldStatus = "function statusInfo(status){return ['accepted','in_work','ready','delivering','completed'].includes(status)?['Заказ подтверждён','',true]:status==='new'?['Ожидает подтверждения','',false]:['Статус уточняется','',false]}";
     const newStatus = "function statusInfo(status){return status==='ready'?['Заказ готов','',true]:status==='accepted'||status==='in_work'?['Заказ подтвержден','',false]:status==='new'?['Заказ создан','',false]:['Статус уточняется','',false]}";
@@ -175,7 +177,7 @@ runningApp.post("/api/orders/:id/ready", async (req, res) => {
 
 async function notifyNewAndAcceptedOrders() {
   try {
-    if (!telegramBotToken) return;
+    if (!telegramBotToken || isSiteSleepWindow()) return;
     const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
     const { data: sessions, error } = await supabase.from("checkout_sessions")
       .select("id,order_id,telegram_user_id,created_at,updated_at,orders(id,status,external_id,created_at,updated_at)")
@@ -207,6 +209,7 @@ setInterval(notifyNewAndAcceptedOrders, 3000);
 // Delete child rows explicitly so cleanup works regardless of FK cascade setup.
 async function cleanupReadyOrders() {
   try {
+    if(isSiteSleepWindow())return;
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data: oldOrders, error: selectError } = await supabase.from("orders").select("id").eq("status", "ready").lt("updated_at", cutoff).limit(500);
     if (selectError) throw selectError;

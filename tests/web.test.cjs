@@ -35,7 +35,7 @@ test('product roulette is shared, category-aware and excludes unavailable produc
 
 test('online menu and online ordering use separate product visibility channels',()=>{
  const order=fs.readFileSync(path.join(root,'public/index.html'),'utf8'),menu=fs.readFileSync(path.join(root,'public/menu/index.html'),'utf8'),server=fs.readFileSync(path.join(root,'server.js'),'utf8');
- assert.match(order,/fetch\(API\+'\/api\/menu'/);assert.match(menu,/fetch\('\/api\/menu\?surface=menu'/);
+ assert.match(order,/fetch\(API\+'\/api\/menu'\+suffix/);assert.match(menu,/fetch\('\/api\/menu'\+suffix/);
  assert.match(server,/visible_in_menu: p\.visibleInOnlineMenu !== false/);assert.match(server,/menuSurface \? "visible_in_menu" : "available_online"/);
  assert.match(server,/missingOnlineMenuColumn/);assert.match(server,/withoutOnlineMenuColumn/);
  assert.match(server,/available_online: c\.availableOnline !== false/);assert.match(server,/visible_in_menu: c\.visibleInOnlineMenu !== false/);
@@ -44,9 +44,17 @@ test('online menu and online ordering use separate product visibility channels',
 test('guest catalog cache is bounded and stock is forced fresh at checkout boundaries',()=>{
  const order=fs.readFileSync(path.join(root,'public/index.html'),'utf8'),menu=fs.readFileSync(path.join(root,'public/menu/index.html'),'utf8'),server=fs.readFileSync(path.join(root,'server.js'),'utf8');
  for(const html of [order,menu])assert.match(html,/<script src="\/guest-menu-cache\.js"><\/script>/);
- assert.match(order,/MENU_CACHE_FRESH_MS=2\*60\*1000/);assert.match(menu,/MENU_CACHE_FRESH_MS=30\*60\*1000/);
+ assert.match(order,/MENU_CACHE_FRESH_MS=7\*24\*60\*60\*1000/);assert.match(menu,/MENU_CACHE_FRESH_MS=7\*24\*60\*60\*1000/);
  assert.match(order,/fetch\(API\+'\/api\/menu\/availability',\{cache:'no-store'\}\)/);assert.match(order,/byExternalId/);
+ assert.match(order,/catalog_revision/);assert.match(menu,/catalog_revision/);assert.match(order,/revision=''/);assert.match(menu,/revision=''/);
  assert.match(server,/public, max-age=3600, stale-while-revalidate=86400/);assert.match(server,/filePath\.endsWith\("\.html"\).*no-cache/s);
+});
+
+test('catalog and image cache use revision based invalidation for a seven day lifetime',()=>{
+ const server=fs.readFileSync(path.join(root,'server.js'),'utf8'),cache=fs.readFileSync(path.join(root,'public/guest-menu-cache.js'),'utf8'),railway=fs.readFileSync(path.join(root,'railway.toml'),'utf8'),ready=fs.readFileSync(path.join(root,'ready-server.js'),'utf8');
+ assert.match(cache,/MAX_AGE_MS=7\*24\*60\*60\*1000/);assert.match(server,/advanceCatalogRevision\(\)/);assert.match(server,/max-age=604800, immutable/);
+ assert.match(server,/createHash\("sha256"\).*digest\("hex"\)/);assert.match(server,/\?v=\$\{imageVersion\}/);assert.match(server,/"cache-control": "max-age=604800"/);
+ assert.match(railway,/sleepApplication = true/);assert.match(ready,/isSiteSleepWindow\(\)/);assert.match(server,/event: sleeping/);
 });
 
 test('availability refresh endpoint returns only the compact stock payload without caching',async()=>{
@@ -54,7 +62,7 @@ test('availability refresh endpoint returns only the compact stock payload witho
  const context={console,express,cors:()=>{},mountOwnerRoutes(){},ownerBotAuthorized(){return true},createPhoneVerificationService:()=>({}),createCheckoutService:()=>({}),createAvailabilityService:()=>({list:async()=>[{externalId:'pizza',quantity:2},{externalId:'water',quantity:null}]}),calculateLoyaltyTransition(){},loyaltyIdempotencyKey(){},validateLoyaltyAllocation(){},randomUUID:()=>'',process:{env:{SUPABASE_URL:'test',SUPABASE_SERVICE_ROLE_KEY:'test'}},createClient:()=>({}),setInterval(){}};
  vm.createContext(context);vm.runInContext(validation,context);vm.runInContext(fs.readFileSync(path.join(root,'server.js'),'utf8').replace(/^import .*;\n/gm,''),context);
  const headers={};const response={setHeader(name,value){headers[name]=value},json(value){this.body=value;return this},status(value){this.code=value;return this}};await routes['/api/menu/availability']({},response);
- assert.equal(headers['Cache-Control'],'no-store');assert.deepEqual(JSON.parse(JSON.stringify(response.body)),{items:[{external_id:'pizza',availability_known:true,available_quantity:2},{external_id:'water',availability_known:true,available_quantity:null}]});
+ assert.equal(headers['Cache-Control'],'no-store');assert.match(response.body.catalog_revision,/^boot-/);assert.deepEqual(JSON.parse(JSON.stringify(response.body.items)),[{external_id:'pizza',availability_known:true,available_quantity:2},{external_id:'water',availability_known:true,available_quantity:null}]);
 });
 
 test('menu endpoint selects the requested visibility column',async()=>{

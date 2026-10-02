@@ -4,3 +4,4 @@ buildCommand = "npm test"
 
 [deploy]
 startCommand = "npm run start"
+sleepApplication = true
