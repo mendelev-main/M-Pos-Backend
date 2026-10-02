@@ -31,11 +31,13 @@ button,a{font:inherit}html,body{overscroll-behavior-x:none}body{touch-action:pan
 <header class="top"><div class="topin"><div class="brand">Проект</div><nav class="nav" aria-label="Разделы"><a class="active" href="/menu/">Меню</a><a href="/">Онлайн заказ</a></nav></div></header>
 <div class="shell">
 <section class="hero"><div><h1>Меню</h1></div></section>
+<section class="roulette-entry"><button id="rouletteLaunch" class="roulette-launch" type="button" aria-haspopup="dialog"><span class="roulette-launch-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5v3M20.5 12h-3M12 20.5v-3M3.5 12h3"></path><path d="m12 12 4.8-4.8"></path></svg></span><span class="roulette-launch-copy"><strong>Не можете выбрать?</strong><small>Запустить рулетку блюд</small></span><span class="roulette-launch-chevron" aria-hidden="true">›</span></button></section>
 <div id="categories" class="categories" aria-label="Категории"></div>
 <main id="grid" class="grid"><div class="loading">Загружаем меню…</div></main>
 
 </div>
 <div id="productModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true"><div class="modal-card"><button class="modal-close" aria-label="Закрыть">×</button><div id="modalContent"></div></div></div>
+<script src="/guest-roulette.js"></script>
 <script>
 const state={menu:{categories:[],products:[]},active:null,fallenByCategory:{},fallenMessages:{}};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -55,6 +57,7 @@ let dropTick=false,easterDone=sessionStorage.getItem('beauty-card-fell')==='1';
 function showEgg(text){let t=document.querySelector('.egg-toast');if(!t){t=document.createElement('div');t.className='egg-toast';document.body.appendChild(t)}t.textContent=text;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800)}
 function maybeDropCard(y){if(easterDone||y<520||matchMedia('(prefers-reduced-motion: reduce)').matches)return;const grid=document.getElementById('grid'),cards=[...grid.querySelectorAll('.product')].filter(c=>{const r=c.getBoundingClientRect();return r.top>120&&r.bottom<innerHeight-40});if(!cards.length)return;const card=cards[Math.floor(cards.length/2)],wrap=card.closest('.product-wrap'),id=card.dataset.product,cat=String(state.active);easterDone=true;sessionStorage.setItem('beauty-card-fell','1');state.fallenByCategory[cat]=id;wrap.classList.add('revealed','message-slot');card.classList.add('falling');setTimeout(()=>{card.remove();const p=state.menu.products.find(x=>String(x.id)===String(id));if(!p)return;const tail=document.createElement('div');tail.className='product-wrap fallen-copy';tail.dataset.wrapProduct=id;tail.innerHTML='<article tabindex="0" role="button" data-product="'+attr(p.id)+'" class="product"><div class="image">'+(p.image_url?'<img src="'+attr(p.image_url)+'" alt="'+attr(p.name)+'" loading="lazy">':'<div class="placeholder">◌</div>')+'</div><div class="info"><div class="name">'+esc(p.name)+'</div>'+(p.description?'<div class="desc">'+esc(p.description)+'</div>':'')+'<div class="price">'+money(p.price)+'</div></div></article>';grid.appendChild(tail);const newCard=tail.querySelector('.product');newCard.addEventListener('click',()=>openProduct(p));newCard.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openProduct(p)}});showEgg('Товар приземлился в конце меню ↓')},1200)}
 function handleMenuScroll(){if(dropTick)return;dropTick=true;requestAnimationFrame(()=>{maybeDropCard(window.scrollY);dropTick=false})}window.addEventListener('scroll',handleMenuScroll,{passive:true});
+window.GuestRoulette?.mount({getCategories:orderedCategories,getProducts:()=>state.menu.products,getActiveCategoryId:()=>state.active,isAvailable:productAvailable,onSelect:openProduct});
 document.querySelector('.modal-close').addEventListener('click',closeProduct);document.getElementById('productModal').addEventListener('click',e=>{if(e.target.id==='productModal')closeProduct()});document.addEventListener('keydown',e=>{if(e.key==='Escape')closeProduct()});
 load();
 </script>
