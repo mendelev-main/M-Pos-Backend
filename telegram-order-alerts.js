@@ -3,18 +3,24 @@ export const ONLINE_ORDER_ALERT_TEXT = "Получен онлайн заказ �
 const workDeviceChatId = value => /^\d{1,20}$/.test(String(value || "").trim());
 
 export function createTelegramOrderAlerts({ supabase, botToken, fetchImpl = fetch }) {
-  async function configure(deviceId, { chatId, enabled }) {
+  async function configure(deviceId, { chatId, ownerChatId, enabled }) {
     const normalizedChatId = String(chatId || "").trim();
     if (enabled && !workDeviceChatId(normalizedChatId)) {
       return { error: "Укажите корректный Telegram ID рабочего устройства", status: 400 };
     }
+    const normalizedOwnerChatId = ownerChatId === undefined ? undefined : String(ownerChatId || "").trim();
+    if (normalizedOwnerChatId !== undefined && normalizedOwnerChatId && !workDeviceChatId(normalizedOwnerChatId)) {
+      return { error: "Укажите корректный Telegram ID владельца", status: 400 };
+    }
     const storedChatId = workDeviceChatId(normalizedChatId) ? normalizedChatId : null;
-    const { error } = await supabase.from("devices").update({
+    const update = {
       telegram_order_chat_id: storedChatId,
       notify_online_orders: Boolean(enabled),
-    }).eq("id", deviceId);
+    };
+    if (normalizedOwnerChatId !== undefined) update.telegram_owner_chat_id = normalizedOwnerChatId || null;
+    const { error } = await supabase.from("devices").update(update).eq("id", deviceId);
     if (error) throw error;
-    return { ok: true, enabled: Boolean(enabled), chatId: storedChatId || "" };
+    return { ok: true, enabled: Boolean(enabled), chatId: storedChatId || "", ownerChatId: normalizedOwnerChatId || "" };
   }
 
   async function notifyNewOrder() {

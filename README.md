@@ -283,3 +283,12 @@ SSE-поток iPad с длинным интервалом переподклю�
 - POS вручную вызывает `PUT /api/device/telegram-order-notifications` с `X-Device-Key` после локального сохранения Telegram-настроек. Backend хранит указанный в POS Telegram ID рабочего устройства и флаг; токен бота из POS не передаётся.
 - После успешного `finalize_verified_checkout` с `duplicate: false` backend отправляет через серверный `TELEGRAM_BOT_TOKEN` сообщение `Получен онлайн заказ проверьте POS` всем активным устройствам с включённым флагом.
 - Отправка не зависит от EventSource, открытого приложения или экрана iPad. Ошибка Telegram журналируется и не откатывает созданный заказ.
+
+## Живой отчёт владельца из POS
+
+- Миграция `supabase/migrations/20261004152417_telegram_owner_live_reports.sql` добавляет отдельный `telegram_owner_chat_id` в строку устройства.
+- POS вручную сохраняет ID владельца через `PUT /api/device/telegram-settings`; локальная запись всегда выполняется первой.
+- Бот проверяет доступ через `POST /api/owner/live-report/access`, а кнопка отчёта вызывает `POST /api/owner/live-report`. Оба маршрута требуют существующий `X-Owner-Bot-Secret`, а Telegram ID приходит только из личного контекста бота.
+- Backend передаёт одноразовый `owner_live_report_request` по активному `/api/orders/events`. POS отвечает на `/api/device/live-report/:requestId` своим device key.
+- Отчёт строится по локальной открытой смене и не записывается в PostgreSQL. Нет SSE-соединения или ответа за восемь секунд — `POS_OFFLINE`.
+- Новый heartbeat, таймер синхронизации и автоматическая выгрузка чеков не добавляются.

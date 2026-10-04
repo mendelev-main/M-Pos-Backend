@@ -10,6 +10,7 @@ import { calculateLoyaltyTransition, formatLoyaltySaleMessage, loyaltyIdempotenc
 import { validateLoyaltyAllocation } from "./loyalty-allocation.js";
 import { closedPageHtml, isOrderingOpen, isSiteSleepWindow, millisecondsUntilSiteWake, VENUE_TIME_ZONE } from "./business-hours.js";
 import { createTelegramOrderAlerts } from "./telegram-order-alerts.js";
+import { createLivePosReports } from "./live-pos-reports.js";
 
 import "./public/order-validation.js";
 const { validate: validateOrderContact, normalizePhone } = globalThis.OrderValidation;
@@ -51,6 +52,7 @@ const phoneVerification = createPhoneVerificationService(supabase, normalizePhon
 const availability = createAvailabilityService({supabase});
 const checkout = createCheckoutService({ supabase, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee });
 const telegramOrderAlerts = createTelegramOrderAlerts({ supabase, botToken: process.env.TELEGRAM_BOT_TOKEN });
+const livePosReports = createLivePosReports({ supabase, createId: () => randomUUID() });
 
 function missingOnlineMenuColumn(error) {
   const message = String(error?.message || error?.details || "").toLowerCase();
@@ -402,7 +404,81 @@ async function requireDevice(req,res){
   const {data,error}=await supabase.from("devices").select("id").eq("device_key",deviceKey).eq("is_active",true).maybeSingle();
   if(error)throw error;if(!data){res.status(401).json({error:"Invalid device key"});return null}return data;
 }
-app.put("/api/device/telegram-order-notifications",async(req,res)=>{try{const device=await requireDevice(req,res);if(!device)return;const result=await telegramOrderAlerts.configure(device.id,{chatId:req.body?.chatId,enabled:req.body?.enabled===true});if(result.error)return res.status(result.status||400).json({error:result.error});return res.json(result)}catch(error){console.error("PUT /api/device/telegram-order-notifications:",error);return res.status(500).json({error:"Не удалось сохранить настройки Telegram"})}});
+async function saveDeviceTelegramSettings(req, res) {
+  try {
+    const device = await requireDevice(req, res);
+    if (!device) return;
+    const result = await telegramOrderAlerts.configure(device.id, {
+      chatId: req.body?.chatId,
+      ownerChatId: req.body?.ownerChatId,
+      enabled: req.body?.enabled === true,
+    });
+    if (result.error) return res.status(result.status || 400).json({ error: result.error });
+    return res.json(result);
+  } catch (error) {
+    console.error("PUT device Telegram settings:", error);
+    return res.status(500).json({ error: "Не удалось сохранить настройки Telegram" });
+  }
+}
+app.put("/api/device/telegram-settings", saveDeviceTelegramSettings);
+// Compatibility for POS builds that only knew the order-notification setting.
+app.put("/api/device/telegram-order-notifications", saveDeviceTelegramSettings);
+
+function deliverLiveReportRequest(deviceId, payload) {
+  const clients = [...eventClients].filter(client => client.deviceId === deviceId);
+  let delivered = false;
+  for (const client of clients) {
+    try {
+      client.res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      delivered = true;
+    } catch (_error) {
+      eventClients.delete(client);
+    }
+  }
+  return delivered;
+}
+function liveReportError(res, error) {
+  return res.status(error.status || 503).json({
+    error: error.status ? error.message : "Сервис отчётов временно недоступен",
+    code: error.code || "LIVE_REPORT_UNAVAILABLE",
+  });
+}
+function requireOwnerBot(req, res) {
+  if (ownerBotAuthorized(req.header("x-owner-bot-secret"), process.env.OWNER_BOT_SHARED_SECRET)) return true;
+  res.status(403).json({ error: "Доступ запрещён", code: "OWNER_FORBIDDEN" });
+  return false;
+}
+app.post("/api/owner/live-report/access", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    if (!requireOwnerBot(req, res)) return;
+    return res.json(await livePosReports.access(req.body?.telegramId));
+  } catch (error) {
+    return liveReportError(res, error);
+  }
+});
+app.post("/api/owner/live-report", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    if (!requireOwnerBot(req, res)) return;
+    return res.json(await livePosReports.request(req.body?.telegramId, deliverLiveReportRequest));
+  } catch (error) {
+    return liveReportError(res, error);
+  }
+});
+app.post("/api/device/live-report/:requestId", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    const device = await requireDevice(req, res);
+    if (!device) return;
+    if (!livePosReports.submit(device.id, req.params.requestId, req.body?.report)) {
+      return res.status(404).json({ error: "Запрос отчёта завершён", code: "LIVE_REPORT_EXPIRED" });
+    }
+    return res.json({ ok: true });
+  } catch (error) {
+    return liveReportError(res, error);
+  }
+});
 async function customerLoyalty(customerId){
   const {data:programs,error}=await supabase.from("loyalty_programs").select("id,name,required_quantity,reward_quantity,is_active,loyalty_earning_products(product_id),loyalty_reward_products(product_id)").eq("is_active",true).order("created_at");
   if(error)throw error;
