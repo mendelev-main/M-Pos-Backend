@@ -276,3 +276,10 @@ SSE-поток iPad с длинным интервалом переподклю�
 ### Проверки
 
 `node --test tests/*.mjs tests/*.cjs`: Owner service, маршруты, чужое устройство/Telegram, повтор/просрочка/гонки, фиксированный получатель отчётов, существующие web-validation сценарии. SQL исполняется тестом на PGlite (PostgreSQL WASM), включая RLS/grants и повторное применение миграции. Это не проверка развёрнутого Supabase/PostgREST.
+
+## Личное уведомление POS о новом онлайн-заказе
+
+- Применить миграцию `supabase/migrations/20261004144957_device_telegram_order_alerts.sql`.
+- POS вручную вызывает `PUT /api/device/telegram-order-notifications` с `X-Device-Key` после локального сохранения Telegram-настроек. Backend хранит только личный Telegram ID и флаг; токен бота из POS не передаётся.
+- После успешного `finalize_verified_checkout` с `duplicate: false` backend отправляет через серверный `TELEGRAM_BOT_TOKEN` сообщение `Получен онлайн заказ проверьте POS` всем активным устройствам с включённым флагом.
+- Отправка не зависит от EventSource, открытого приложения или экрана iPad. Ошибка Telegram журналируется и не откатывает созданный заказ.

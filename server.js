@@ -9,6 +9,7 @@ import { createAvailabilityService } from "./availability-service.js";
 import { calculateLoyaltyTransition, formatLoyaltySaleMessage, loyaltyIdempotencyKey } from "./loyalty-engine.js";
 import { validateLoyaltyAllocation } from "./loyalty-allocation.js";
 import { closedPageHtml, isOrderingOpen, isSiteSleepWindow, millisecondsUntilSiteWake, VENUE_TIME_ZONE } from "./business-hours.js";
+import { createTelegramOrderAlerts } from "./telegram-order-alerts.js";
 
 import "./public/order-validation.js";
 const { validate: validateOrderContact, normalizePhone } = globalThis.OrderValidation;
@@ -49,6 +50,7 @@ mountOwnerRoutes(app,{db:supabase});
 const phoneVerification = createPhoneVerificationService(supabase, normalizePhone);
 const availability = createAvailabilityService({supabase});
 const checkout = createCheckoutService({ supabase, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee });
+const telegramOrderAlerts = createTelegramOrderAlerts({ supabase, botToken: process.env.TELEGRAM_BOT_TOKEN });
 
 function missingOnlineMenuColumn(error) {
   const message = String(error?.message || error?.details || "").toLowerCase();
@@ -132,6 +134,9 @@ app.post("/api/phone-verification/:token/confirm", async (req, res) => {
     if (finalized && !finalized.ok) {
       const stockError=finalized.reason==="OUT_OF_STOCK"?"Товар закончился или его осталось недостаточно":finalized.reason==="AVAILABILITY_UNAVAILABLE"?"Актуальные остатки временно недоступны":"Не удалось завершить оформление заказа";
       return res.status(409).json({ ok: false, error: stockError, reason: finalized.reason });
+    }
+    if (finalized?.ok && finalized.duplicate !== true) {
+      void telegramOrderAlerts.notifyNewOrder().catch(error => console.error("Telegram POS order alert:", error));
     }
     return res.json({ ...result, orderCreated: Boolean(finalized?.ok) });
   } catch (error) {
@@ -397,6 +402,7 @@ async function requireDevice(req,res){
   const {data,error}=await supabase.from("devices").select("id").eq("device_key",deviceKey).eq("is_active",true).maybeSingle();
   if(error)throw error;if(!data){res.status(401).json({error:"Invalid device key"});return null}return data;
 }
+app.put("/api/device/telegram-order-notifications",async(req,res)=>{try{const device=await requireDevice(req,res);if(!device)return;const result=await telegramOrderAlerts.configure(device.id,{chatId:req.body?.chatId,enabled:req.body?.enabled===true});if(result.error)return res.status(result.status||400).json({error:result.error});return res.json(result)}catch(error){console.error("PUT /api/device/telegram-order-notifications:",error);return res.status(500).json({error:"Не удалось сохранить настройки Telegram"})}});
 async function customerLoyalty(customerId){
   const {data:programs,error}=await supabase.from("loyalty_programs").select("id,name,required_quantity,reward_quantity,is_active,loyalty_earning_products(product_id),loyalty_reward_products(product_id)").eq("is_active",true).order("created_at");
   if(error)throw error;
