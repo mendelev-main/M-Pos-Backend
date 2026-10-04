@@ -1,14 +1,14 @@
 export const ONLINE_ORDER_ALERT_TEXT = "Получен онлайн заказ проверьте POS";
 
-const personalChatId = value => /^\d{1,20}$/.test(String(value || "").trim());
+const workDeviceChatId = value => /^\d{1,20}$/.test(String(value || "").trim());
 
 export function createTelegramOrderAlerts({ supabase, botToken, fetchImpl = fetch }) {
   async function configure(deviceId, { chatId, enabled }) {
     const normalizedChatId = String(chatId || "").trim();
-    if (enabled && !personalChatId(normalizedChatId)) {
-      return { error: "Укажите корректный личный Telegram ID", status: 400 };
+    if (enabled && !workDeviceChatId(normalizedChatId)) {
+      return { error: "Укажите корректный Telegram ID рабочего устройства", status: 400 };
     }
-    const storedChatId = personalChatId(normalizedChatId) ? normalizedChatId : null;
+    const storedChatId = workDeviceChatId(normalizedChatId) ? normalizedChatId : null;
     const { error } = await supabase.from("devices").update({
       telegram_order_chat_id: storedChatId,
       notify_online_orders: Boolean(enabled),
@@ -25,7 +25,7 @@ export function createTelegramOrderAlerts({ supabase, botToken, fetchImpl = fetc
       .eq("notify_online_orders", true)
       .not("telegram_order_chat_id", "is", null);
     if (error) throw error;
-    const chatIds = [...new Set((data || []).map(row => String(row.telegram_order_chat_id || "").trim()).filter(personalChatId))];
+    const chatIds = [...new Set((data || []).map(row => String(row.telegram_order_chat_id || "").trim()).filter(workDeviceChatId))];
     const results = await Promise.allSettled(chatIds.map(async chatId => {
       const response = await fetchImpl(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: "POST",
