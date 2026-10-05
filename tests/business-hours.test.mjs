@@ -12,15 +12,25 @@ test("guest site sleeps from midnight until 06:00 venue time",()=>{
   assert.equal(millisecondsUntilSiteWake(at("2026-10-02T21:30:00Z"),zone),5.5*60*60*1000);
 });
 
-test("online ordering is accepted only from 10:00 until 23:00 venue time",()=>{
+test("online ordering is accepted only from 10:00 until 22:30 venue time",()=>{
   assert.equal(isOrderingOpen(at("2026-10-03T06:59:00Z"),zone),false);
   assert.equal(isOrderingOpen(at("2026-10-03T07:00:00Z"),zone),true);
-  assert.equal(isOrderingOpen(at("2026-10-03T19:59:00Z"),zone),true);
-  assert.equal(isOrderingOpen(at("2026-10-03T20:00:00Z"),zone),false);
+  assert.equal(isOrderingOpen(at("2026-10-03T19:29:59Z"),zone),true);
+  assert.equal(isOrderingOpen(at("2026-10-03T19:30:00Z"),zone),false);
 });
 
 test("overnight page shows the venue message and working hours",()=>{
   const html=closedPageHtml();
   assert.match(html,/Ушли отдыхать, скоро вернемся/);
   assert.match(html,/Работаем с 10:00 до 23:00/);
+});
+
+ test("ordering banner reuses the mascot and gives the correct reopening day",()=>{
+ const evening=closedPageHtml({ordering:true,date:at("2026-10-03T19:30:00Z")});
+ assert.match(evening,/Пошли наводить порядок/);
+ assert.match(evening,/Встретимся завтра в 10:00/);
+ assert.match(evening,/sleeping-mascot-v1.webp/);
+ assert.match(evening,/href="\/menu\/"/);
+ const morning=closedPageHtml({ordering:true,date:at("2026-10-04T04:00:00Z")});
+ assert.match(morning,/сегодня в 10:00/);
 });

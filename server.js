@@ -20,6 +20,13 @@ app.use(cors());
 app.use("/api/owner/report", express.json({ limit: "14mb" }));
 app.use(express.json({ limit: "2mb" }));
 app.use((req,res,next)=>{
+  if(req.method==="GET"&&req.path==="/"&&!isSiteSleepWindow()&&!isOrderingOpen()){
+    res.setHeader("Cache-Control","no-store");
+    return res.type("html").send(closedPageHtml({ordering:true}));
+  }
+  next();
+});
+app.use((req,res,next)=>{
   if(!isSiteSleepWindow())return next();
   const retrySeconds=Math.ceil(millisecondsUntilSiteWake()/1000),path=String(req.path||"");
   if(req.method==="GET"&&(path==="/"||path==="/menu"||path==="/menu/")){res.setHeader("Cache-Control","no-store");res.setHeader("Retry-After",String(retrySeconds));return res.status(503).type("html").send(closedPageHtml())}
@@ -77,7 +84,7 @@ app.get("/health", (_req, res) => res.json({ ok: true, service: "prilavok-backen
 
 app.post("/api/checkout", async (req, res) => {
   try {
-    if(!orderingOpenNow())return res.status(503).json({error:"Онлайн-заказы принимаются с 10:00 до 23:00",opensAt:"10:00",closesAt:"23:00",timeZone:VENUE_TIME_ZONE});
+    if(!orderingOpenNow())return res.status(503).json({error:"Онлайн-заказы принимаются с 10:00 до 22:30",opensAt:"10:00",closesAt:"22:30",timeZone:VENUE_TIME_ZONE});
     const result = await checkout.create(req.body);
     if (result.error) return res.status(result.status || 400).json({ error: result.error });
     return res.status(201).json(result);
@@ -559,7 +566,7 @@ app.post("/api/customers/:id/loyalty-adjustment",async(req,res)=>{
   }catch(e){console.error("loyalty adjustment",e);res.status(500).json({error:"Failed to adjust loyalty"})}
 });
 
-app.get("/api/config", (_req, res) => res.json({ deliveryFee: Number.isFinite(deliveryFee) ? deliveryFee : 0,orderingOpen:orderingOpenNow(),orderHours:{opensAt:"10:00",closesAt:"23:00",timeZone:VENUE_TIME_ZONE} }));
+app.get("/api/config", (_req, res) => res.json({ deliveryFee: Number.isFinite(deliveryFee) ? deliveryFee : 0,orderingOpen:orderingOpenNow(),orderHours:{opensAt:"10:00",closesAt:"22:30",timeZone:VENUE_TIME_ZONE} }));
 
 app.post("/api/orders", async (req, res) => {
   try {
