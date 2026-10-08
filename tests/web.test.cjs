@@ -1,6 +1,6 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const vm=require('node:vm');const path=require('node:path');
 const root=path.join(__dirname,'..');const validation=fs.readFileSync(path.join(root,'public/order-validation.js'),'utf8');
-function fixture(){const fields=new Map();const document={addEventListener(){},querySelectorAll(){return []},getElementById(id){if(!fields.has(id))fields.set(id,{hidden:id==='trackingCard',querySelector(){return null},addEventListener(){},classList:{add(){},remove(){},toggle(){}},style:{},setAttribute(k,v){this[k]=v},scrollIntoView(){},value:'',innerHTML:''});return fields.get(id)}};const c={document,console,addEventListener(){},Date:class extends Date{constructor(...args){super(...(args.length?args:['2026-10-03T12:00:00Z']))}},location:{origin:'https://example.test',reload(){}},localStorage:{getItem(){return ''},setItem(){},removeItem(){}},setTimeout(){},clearTimeout(){},setInterval(){return 1},clearInterval(){},fetch:async()=>({ok:true,json:async()=>({categories:[],products:[],order:{status:'accepted',order_items:[]}})})};c.window=c;vm.createContext(c);vm.runInContext(validation,c);vm.runInContext([...fs.readFileSync(path.join(root,'public/index.html'),'utf8').matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map(m=>m[1]).join('\n'),c);return c;}
+function fixture(){const fields=new Map();const document={addEventListener(){},querySelectorAll(){return []},getElementById(id){if(!fields.has(id))fields.set(id,{hidden:id==='trackingCard',querySelector(){return null},addEventListener(){},classList:{add(){},remove(){},toggle(){}},style:{},setAttribute(k,v){this[k]=v},scrollIntoView(){},value:'',innerHTML:''});return fields.get(id)}};const c={document,console,AbortController,addEventListener(){},Date:class extends Date{constructor(...args){super(...(args.length?args:['2026-10-03T12:00:00Z']))}},location:{origin:'https://example.test',reload(){}},localStorage:{getItem(){return ''},setItem(){},removeItem(){}},setTimeout(){},clearTimeout(){},setInterval(){return 1},clearInterval(){},fetch:async()=>({ok:true,json:async()=>({categories:[],products:[],order:{status:'accepted',order_items:[]}})})};c.window=c;vm.createContext(c);vm.runInContext(validation,c);vm.runInContext([...fs.readFileSync(path.join(root,'public/index.html'),'utf8').matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map(m=>m[1]).join('\n'),c);return c;}
 test('phone validation requires Belarus prefix and nine digits',()=>{const v=fixture().OrderValidation;for(const s of ['+375291234567','+375 (29) 123-45-67'])assert.equal(v.normalizePhone(s),'+375291234567');for(const s of ['291234567','+7291234567','+375','+3752912345678','+375abc291234567'])assert.equal(v.normalizePhone(s),'');});
 test('comments filter whole words without blocking ordinary food requests',()=>{const v=fixture().OrderValidation;for(const s of ['Без лука, пожалуйста','Страхуем доставку','Хлеб и соль','ребенок ждет'])assert.equal(v.hasProfanity(s),false,s);for(const s of ['БЛЯТЬ!','сука','пиздец','fuck','хуй'])assert.equal(v.hasProfanity(s),true,s);assert.ok(v.validate({phone:'+375291234567',items:[{comment:'блять'}]}));});
 test('website does not expose customer order tracking',()=>{const html=fs.readFileSync(path.join(root,'public/index.html'),'utf8');assert.doesNotMatch(html,/id="trackingLink"|id="trackingCard"|prilavok_tracking_token|startTrackingPolling|renderTracking|toggleTracking/);});
@@ -89,12 +89,12 @@ test('menu endpoint removes products whose category is hidden on the requested s
  assert.deepEqual(response.body.products.map(product=>product.id),['shown']);assert.deepEqual(response.body.categories.map(category=>category.id),['visible']);
 });
 
- test('open ordering tab switches to the closed banner at 22:30',()=>{
+ test('open ordering tab disables checkout at 22:30 without navigation',()=>{
  const c=fixture();let reloaded=false;
  c.location.reload=()=>{reloaded=true};
  c.Date=class extends Date{constructor(){super('2026-10-03T19:29:59Z')}};
  assert.equal(c.orderingOpenNow(),true);
  c.Date=class extends Date{constructor(){super('2026-10-03T19:30:00Z')}};
  assert.equal(c.orderingOpenNow(),false);
- c.applyOrderingState();assert.equal(reloaded,true);
+ c.applyOrderingState();assert.equal(reloaded,false);assert.equal(c.document.getElementById('submitBtn').disabled,true);
 });
