@@ -1,4 +1,5 @@
 import express from "express";
+import { sendLoyaltyTelegram } from "./loyalty-telegram.js";
 import { createClient } from "@supabase/supabase-js";
 import { readFile } from "node:fs/promises";
 import { closedPageHtml, isSiteSleepWindow, millisecondsUntilSiteWake } from "./business-hours.js";
@@ -65,16 +66,8 @@ async function sendOrderTelegramStatus(orderId, status, externalId, estimateLabe
   }
 }
 
-async function sendCustomerTelegram(chatId,text) {
-  if (!telegramBotToken || !chatId || !text) return false;
-  try {
-    const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: String(chatId), text, disable_web_page_preview: true }),
-    });
-    if (!response.ok) throw new Error(`Telegram ${response.status}: ${await response.text()}`);
-    return true;
-  } catch (error) { console.error("Telegram loyalty notification:", error); return false; }
+async function sendCustomerTelegram(chatId,text,events=[]) {
+  return sendLoyaltyTelegram({botToken:telegramBotToken,chatId,text,events});
 }
 
 // Customer tracking has exactly three public stages:
@@ -108,7 +101,7 @@ if (Array.isArray(stack)) {
       res.json = body => {
         const freshEvents = Array.isArray(body?.events) ? body.events.filter(event => !event.duplicate) : [];
         if (body?.ok && freshEvents.length && body?.telegramUserId && body?.loyaltyMessage) {
-          void sendCustomerTelegram(body.telegramUserId, body.loyaltyMessage);
+          void sendCustomerTelegram(body.telegramUserId, body.loyaltyMessage, freshEvents);
         }
         return originalJson(body);
       };
