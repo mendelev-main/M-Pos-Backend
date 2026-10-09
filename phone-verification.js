@@ -1,5 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 
+export function normalizeTelegramUsername(value) {
+  if (typeof value !== "string") return null;
+  const name=value.trim().replace(/^@/, "");
+  return /^[A-Za-z][A-Za-z0-9_]{3,31}$/.test(name) ? name : null;
+}
+
 export const PHONE_VERIFICATION_TTL_MS = 5 * 60 * 1000;
 const TELEGRAM_BOT_USERNAME = "project_account_bot";
 
@@ -47,7 +53,7 @@ export function createPhoneVerificationService(supabase, normalizePhone) {
     return data;
   }
 
-  async function confirm(token, phone, telegramUserId) {
+  async function confirm(token, phone, telegramUserId, telegramUsername) {
     const normalized = normalizePhone(phone);
     if (!normalized || !telegramUserId) return { ok: false, reason: "INVALID" };
 
@@ -57,7 +63,7 @@ export function createPhoneVerificationService(supabase, normalizePhone) {
 
     const verifiedAt = nowIso();
     const { data, error } = await supabase.from("phone_verifications")
-      .update({ status: "VERIFIED", verified_at: verifiedAt, telegram_user_id: String(telegramUserId) })
+      .update({ status: "VERIFIED", verified_at: verifiedAt, telegram_user_id: String(telegramUserId), ...(telegramUsername !== undefined ? { telegram_username: normalizeTelegramUsername(telegramUsername), telegram_username_observed: true } : {}) })
       .eq("id", verification.id).eq("status", "PENDING")
       .select("id,status,verified_at,return_url,telegram_user_id").maybeSingle();
     if (error) throw error;
