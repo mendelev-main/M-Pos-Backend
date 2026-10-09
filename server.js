@@ -497,6 +497,7 @@ function customerSearchFilter(value) {
   const q = String(value || "").trim();
   const compact = q.replace(/[\s()-]/g, "");
   if (/^\+375\d{4,9}$/.test(compact)) return { column: "normalized_phone", pattern: compact + "%" };
+  if (/^\d{4}$/.test(compact)) return { column: "normalized_phone", pattern: "%" + compact };
   const phone = normalizePhone(q);
   return phone ? { column: "normalized_phone", pattern: "%" + phone + "%" } : { column: "name", pattern: "%" + q + "%" };
 }
