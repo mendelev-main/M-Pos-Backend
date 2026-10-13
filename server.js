@@ -57,7 +57,7 @@ let catalogRevision=`boot-${Date.now().toString(36)}-${newRevisionId()}`;
 function advanceCatalogRevision(){catalogRevision=`sync-${Date.now().toString(36)}-${newRevisionId()}`;return catalogRevision}
 mountOwnerRoutes(app,{db:supabase});
 const phoneVerification = createPhoneVerificationService(supabase, normalizePhone);
-const availability = createAvailabilityService({supabase});
+const availability = createAvailabilityService({ query });
 const checkout = createCheckoutService({ supabase, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee });
 const telegramOrderAlerts = createTelegramOrderAlerts({ supabase, botToken: process.env.TELEGRAM_BOT_TOKEN });
 const livePosReports = createLivePosReports({ supabase, createId: () => randomUUID() });

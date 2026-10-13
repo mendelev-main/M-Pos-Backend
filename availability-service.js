@@ -6,11 +6,13 @@ function normalizeQuantity(value){
   return Number.isFinite(quantity)&&quantity>=0?quantity:0;
 }
 
-export function createAvailabilityService({supabase}){
+export function createAvailabilityService({query}){
   async function list(){
-    const {data,error}=await supabase.rpc("get_web_availability");
-    if(error)throw error;
-    return (data||[]).map(row=>({externalId:String(row.external_product_id||""),quantity:normalizeQuantity(row.quantity)})).filter(row=>row.externalId);
+    const {rows}=await query("SELECT external_product_id, quantity FROM public.get_web_availability()");
+    return (rows||[]).map(row=>({
+      externalId:String(row.external_product_id||""),
+      quantity:normalizeQuantity(row.quantity)
+    })).filter(row=>row.externalId);
   }
 
   async function attachToProducts(products){
@@ -40,19 +42,53 @@ export function createAvailabilityService({supabase}){
     if(!key)return {error:"Missing device key",status:401};
     if(Number(body?.version)!==AVAILABILITY_VERSION)return {error:"Unsupported availability version",status:409};
     if(!Number.isSafeInteger(revision)||revision<=0||Number.isNaN(sampledAt.getTime())||!rawItems||rawItems.length>10000)return {error:"Invalid availability snapshot",status:400};
+
     const seen=new Set(),items=[];
     for(const raw of rawItems){
       const externalId=String(raw?.externalId||"").trim(),quantity=raw?.quantity===null?null:Number(raw?.quantity);
       if(!externalId||seen.has(externalId)||(quantity!==null&&(!Number.isFinite(quantity)||quantity<0)))return {error:"Invalid availability item",status:400};
-      seen.add(externalId);items.push({externalId,quantity});
+      seen.add(externalId);
+      items.push({externalId,quantity});
     }
-    const settledWebOrderIds=[...new Set((Array.isArray(body?.settledWebOrderIds)?body.settledWebOrderIds:[]).map(String).map(value=>value.trim()).filter(Boolean))].slice(0,100);
-    const {data:device,error:deviceError}=await supabase.from("devices").select("id").eq("device_key",key).eq("is_active",true).maybeSingle();
-    if(deviceError)throw deviceError;
+
+    const settledWebOrderIds=[...new Set(
+      (Array.isArray(body?.settledWebOrderIds)?body.settledWebOrderIds:[])
+        .map(String)
+        .map(value=>value.trim())
+        .filter(Boolean)
+    )].slice(0,100);
+
+    const {rows:devices}=await query(
+      `SELECT id
+       FROM public.devices
+       WHERE device_key=$1
+         AND is_active=TRUE
+       LIMIT 1`,
+      [key]
+    );
+
+    const device=devices?.[0];
     if(!device)return {error:"Invalid device key",status:401};
-    const {data:applied,error}=await supabase.rpc("store_availability_snapshot",{p_device_id:device.id,p_revision:revision,p_sampled_at:sampledAt.toISOString(),p_items:items,p_settled_order_ids:settledWebOrderIds});
-    if(error)throw error;
-    return {ok:true,applied:applied===true,ignoredAsStale:applied!==true,revision};
+
+    const {rows}=await query(
+      `SELECT public.store_availability_snapshot(
+         $1::uuid,
+         $2::bigint,
+         $3::timestamptz,
+         $4::jsonb,
+         $5::text[]
+       ) AS applied`,
+      [
+        device.id,
+        revision,
+        sampledAt.toISOString(),
+        JSON.stringify(items),
+        settledWebOrderIds
+      ]
+    );
+
+    const applied=rows?.[0]?.applied===true;
+    return {ok:true,applied,ignoredAsStale:!applied,revision};
   }
 
   return {list,attachToProducts,validateOrder,store};
