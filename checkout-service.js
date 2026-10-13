@@ -9,7 +9,7 @@ export function createCheckoutService({ query, normalizePhone, validateOrderCont
     const orderType=String(payload?.orderType||"Самовывоз").trim(),customerName=String(payload?.customerName||"").trim(),rawPhone=String(payload?.phone||"").trim(),phone=normalizePhone(rawPhone),address=String(payload?.address||"").trim(),comment=String(payload?.comment||"").trim(),requestedItems=Array.isArray(payload?.items)?payload.items:[];
     if(!customerName||!phone||!requestedItems.length)return {error:"Заполните данные заказа и добавьте товары",status:400};
     if(orderType==="Доставка"&&!address)return {error:"Укажите адрес доставки",status:400};
-    const contactError=validateOrderContact({phone:rawPhone,comment,items:requestedItems});if(contactError)return {error:contactError,status:400};
+    const contactError=validateOrderContact({customerName,phone:rawPhone,address,comment,items:requestedItems});if(contactError)return {error:contactError,status:400};
     const ids=requestedItems.map(x=>String(x.productId||"").trim()).filter(Boolean),uniqueIds=[...new Set(ids)];
     if(!uniqueIds.length||uniqueIds.length!==ids.length)return {error:"Некорректные товары в заказе",status:400};
     const {rows:products}=await query(`SELECT id,external_id,name,price FROM public.products WHERE id=ANY($1::uuid[]) AND is_active=TRUE AND available_online=TRUE`,[uniqueIds]);

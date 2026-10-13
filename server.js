@@ -753,13 +753,13 @@ app.post("/api/orders", async (req, res) => {
     const requestedItems = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!customerName || !phone || !requestedItems.length) return res.status(400).json({ error: "Заполните данные заказа и добавьте товары" });
     if (orderType === "Доставка" && !address) return res.status(400).json({ error: "Укажите адрес доставки" });
+    const contactError = validateOrderContact({ customerName, phone: rawPhone, address, comment, items: requestedItems });
+    if (contactError) return res.status(400).json({ error: contactError });
     if (!verificationToken) return res.status(403).json({ error: "Подтвердите номер телефона через Telegram" });
 
     const verification = await phoneVerification.get(verificationToken);
     if (!verification || verification.status !== "VERIFIED" || verification.phone !== phone) return res.status(403).json({ error: "Номер телефона не подтверждён" });
 
-    const contactError = validateOrderContact({ phone: rawPhone, comment, items: requestedItems });
-    if (contactError) return res.status(400).json({ error: contactError });
     const ids = requestedItems.map(x => String(x.productId || "").trim()).filter(Boolean); const uniqueIds = [...new Set(ids)];
     if (!uniqueIds.length || uniqueIds.length !== ids.length) return res.status(400).json({ error: "Некорректные товары в заказе" });
     const { rows: products } = await query(`SELECT id,external_id,name,price FROM public.products WHERE id=ANY($1::uuid[]) AND is_active=TRUE AND available_online=TRUE`,[uniqueIds]);
