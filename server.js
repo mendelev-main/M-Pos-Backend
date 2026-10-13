@@ -17,6 +17,7 @@ import "./public/order-validation.js";
 const { validate: validateOrderContact, normalizePhone } = globalThis.OrderValidation;
 
 const app = express();
+app.set("trust proxy", 1);
 app.use(cors());
 app.use("/api/owner/report", express.json({ limit: "14mb" }));
 app.use(express.json({ limit: "2mb" }));
@@ -144,7 +145,8 @@ app.post("/api/media/upload", async (req, res) => {
     await mkdir(mediaRoot,{recursive:true});
     await writeFile(`${mediaRoot}/${fileName}`,buffer);
     const imageVersion=createHash("sha256").update(buffer).digest("hex").slice(0,16);
-    return res.json({ok:true,url:`/media/products/${fileName}?v=${imageVersion}`});
+    const publicBase=String(process.env.PUBLIC_BASE_URL||`${req.protocol}://${req.get("host")}`).replace(/\/$/,"");
+    return res.json({ok:true,url:`${publicBase}/media/products/${fileName}?v=${imageVersion}`});
   } catch(error){console.error("POST /api/media/upload:",error);return res.status(500).json({error:"Failed to upload image"});}
 });
 
