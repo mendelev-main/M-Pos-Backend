@@ -755,8 +755,7 @@ app.post("/api/orders", async (req, res) => {
     if (contactError) return res.status(400).json({ error: contactError });
     const ids = requestedItems.map(x => String(x.productId || "").trim()).filter(Boolean); const uniqueIds = [...new Set(ids)];
     if (!uniqueIds.length || uniqueIds.length !== ids.length) return res.status(400).json({ error: "Некорректные товары в заказе" });
-    const { data: products, error: productsError } = await supabase.from("products").select("id,external_id,name,price").in("id", uniqueIds).eq("is_active", true).eq("available_online", true);
-    if (productsError) throw productsError;
+    const { rows: products } = await query(`SELECT id,external_id,name,price FROM public.products WHERE id=ANY($1::uuid[]) AND is_active=TRUE AND available_online=TRUE`,[uniqueIds]);
     const productMap = new Map((products || []).map(p => [p.id, p]));
     if (productMap.size !== uniqueIds.length) return res.status(400).json({ error: "Один из товаров больше недоступен для заказа" });
     const items = []; let subtotal = 0;
@@ -767,56 +766,15 @@ app.post("/api/orders", async (req, res) => {
 
     const fee = orderType === "Доставка" ? (Number.isFinite(deliveryFee) ? deliveryFee : 0) : 0; const total = subtotal + fee;
     const externalId = `WEB-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`; const trackingToken = randomUUID().replace(/-/g, "");
-    const { data: order, error: orderError } = await supabase.rpc("create_web_order",{p_external_id:externalId,p_tracking_token:trackingToken,p_order_type:orderType,p_customer_name:customerName,p_phone:phone,p_address:orderType==="Доставка"?address:null,p_comment:comment||null,p_total:total,p_delivery_fee:fee,p_items:items});
-    if (orderError) throw orderError;
-    const created=Array.isArray(order)?order[0]:order;
+    const { rows: orderRows } = await query(`SELECT (public.create_web_order($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)).*`,[externalId,trackingToken,orderType,customerName,phone,orderType==="Доставка"?address:null,comment||null,total,fee,JSON.stringify(items)]);
+    const created=orderRows?.[0];
     if(!created?.id)throw new Error("Atomic order creation returned no order");
     res.status(201).json({ ok: true, orderId: created.id, externalId, trackingToken, total, deliveryFee: fee });
   } catch (error) { const message=String(error?.message||"");console.error("POST /api/orders:", error);if(message.includes("OUT_OF_STOCK"))return res.status(409).json({error:"Товар закончился или его осталось недостаточно"});if(message.includes("AVAILABILITY_UNAVAILABLE"))return res.status(409).json({error:"Актуальные остатки временно недоступны"});res.status(500).json({ error: "Не удалось создать заказ" }); }
 });
 
-app.get("/api/orders/:token", async (req, res) => {
-  try { const token = String(req.params.token || "").trim(); if (!token) return res.status(400).json({ error: "Missing token" }); const { data: order, error } = await supabase.from("orders").select("id,external_id,status,order_type,customer_name,phone,address,comment,total,delivery_fee,created_at,updated_at,order_items(product_name,price,quantity,comment)").eq("tracking_token", token).maybeSingle(); if (error) throw error; if (!order) return res.status(404).json({ error: "Заказ не найден" }); res.json({ order }); }
-  catch (error) { console.error("GET /api/orders/:token:", error); res.status(500).json({ error: "Не удалось загрузить заказ" }); }
-});
+app.get("/api/orders/:token",async(req,res)=>{try{const token=String(req.params.token||"").trim();if(!token)return res.status(400).json({error:"Missing token"});const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.customer_name,o.phone,o.address,o.comment,o.total,o.delivery_fee,o.created_at,o.updated_at,COALESCE((SELECT jsonb_agg(jsonb_build_object('product_name',i.product_name,'price',i.price,'quantity',i.quantity,'comment',i.comment) ORDER BY i.created_at,i.id) FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS order_items FROM public.orders o WHERE o.tracking_token=$1 LIMIT 1`,[token]);const order=rows?.[0];if(!order)return res.status(404).json({error:"Заказ не найден"});res.json({order});}catch(error){console.error("GET /api/orders/:token:",error);res.status(500).json({error:"Не удалось загрузить заказ"})}});
 
-app.post("/api/orders/:id/accept", async (req, res) => {
-  try {
-    const deviceKey = String(req.header("x-device-key") || req.body?.deviceKey || "").trim();
-    const id = String(req.params.id || "").trim();
-    if (!deviceKey) return res.status(401).json({ error: "Missing device key" });
-    if (!id) return res.status(400).json({ error: "Invalid order id" });
+app.post("/api/orders/:id/accept",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim();if(!id)return res.status(400).json({error:"Invalid order id"});const {rows:existingRows}=await query(`SELECT id,status,external_id,updated_at FROM public.orders WHERE id=$1::uuid LIMIT 1`,[id]);const existing=existingRows?.[0];if(!existing)return res.status(404).json({error:"Заказ не найден"});if(existing.status==="accepted")return res.json({ok:true,order:existing,alreadyAccepted:true});if(existing.status!=="new")return res.status(409).json({error:"Заказ уже изменил статус",order:existing});const {rows}=await query(`UPDATE public.orders SET status='accepted',updated_at=now() WHERE id=$1::uuid AND status='new' RETURNING id,status,external_id,updated_at`,[id]);const order=rows?.[0];if(!order){const {rows:currentRows}=await query(`SELECT id,status,external_id,updated_at FROM public.orders WHERE id=$1::uuid LIMIT 1`,[id]);const current=currentRows?.[0];if(current?.status==="accepted")return res.json({ok:true,order:current,alreadyAccepted:true});return res.status(409).json({error:"Заказ уже изменил статус",order:current||null});}return res.json({ok:true,order});}catch(error){console.error("POST /api/orders/:id/accept:",error);return res.status(500).json({error:"Не удалось принять заказ"})}});
 
-    const { data: device, error: deviceError } = await supabase.from("devices").select("id").eq("device_key", deviceKey).eq("is_active", true).maybeSingle();
-    if (deviceError) throw deviceError;
-    if (!device) return res.status(401).json({ error: "Invalid device key" });
-
-    const { data: existing, error: existingError } = await supabase.from("orders").select("id,status,external_id,updated_at").eq("id", id).maybeSingle();
-    if (existingError) throw existingError;
-    if (!existing) return res.status(404).json({ error: "Заказ не найден" });
-
-    if (existing.status === "accepted") return res.json({ ok: true, order: existing, alreadyAccepted: true });
-    if (existing.status !== "new") return res.status(409).json({ error: "Заказ уже изменил статус", order: existing });
-
-    const { data: order, error } = await supabase.from("orders").update({ status: "accepted", updated_at: new Date().toISOString() }).eq("id", id).eq("status", "new").select("id,status,external_id,updated_at").maybeSingle();
-    if (error) throw error;
-    if (!order) {
-      const { data: current, error: currentError } = await supabase.from("orders").select("id,status,external_id,updated_at").eq("id", id).maybeSingle();
-      if (currentError) throw currentError;
-      if (current?.status === "accepted") return res.json({ ok: true, order: current, alreadyAccepted: true });
-      return res.status(409).json({ error: "Заказ уже изменил статус", order: current || null });
-    }
-
-    return res.json({ ok: true, order });
-  } catch (error) {
-    console.error("POST /api/orders/:id/accept:", error);
-    return res.status(500).json({ error: "Не удалось принять заказ" });
-  }
-});
-
-app.patch("/api/orders/:id/status", async (req, res) => {
-  try { const deviceKey = String(req.header("x-device-key") || "").trim(); const id = String(req.params.id || "").trim(); const status = String(req.body?.status || "").trim(); const allowed = new Set(["new", "accepted", "preparing", "ready", "cancelled"]); if (!deviceKey) return res.status(401).json({ error: "Missing device key" }); if (!id || !allowed.has(status)) return res.status(400).json({ error: "Invalid status" }); const { data: device, error: deviceError } = await supabase.from("devices").select("id").eq("device_key", deviceKey).eq("is_active", true).maybeSingle(); if (deviceError) throw deviceError; if (!device) return res.status(401).json({ error: "Invalid device key" }); const { data: order, error } = await supabase.from("orders").update({ status, updated_at: new Date().toISOString() }).eq("id", id).select("id,status,updated_at").single(); if (error) throw error; res.json({ ok: true, order }); }
-  catch (error) { console.error("PATCH /api/orders/:id/status:", error); res.status(500).json({ error: "Не удалось обновить статус заказа" }); }
-});
-
-app.listen(port, () => console.log(`Prilavok backend listening on ${port}`));
+app.patch("/api/orders/:id/status",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim(),status=String(req.body?.status||"").trim(),allowed=new Set(["new","accepted","preparing","ready","cancelled"]);if(!id||!allowed.has(status))return res.status(400).json({error:"Invalid status"});const {rows}=await query(`UPDATE public.orders SET status=$2,updated_at=now() WHERE id=$1::uuid RETURNING id,status,updated_at`,[id,status]);if(!rows?.[0])return res.status(404).json({error:"Заказ не найден"});res.json({ok:true,order:rows[0]});}catch(error){console.error("PATCH /api/orders/:id/status:",error);res.status(500).json({error:"Не удалось обновить статус заказа"})}});
