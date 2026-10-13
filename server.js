@@ -649,11 +649,52 @@ app.post("/api/device/live-report/:requestId", async (req, res) => {
     return liveReportError(res, error);
   }
 });
+async function loadLoyaltyPrograms({ activeOnly = false } = {}) {
+  const { rows } = await query(
+    `SELECT
+       p.id,
+       p.name,
+       p.required_quantity,
+       p.reward_quantity,
+       p.is_active,
+       p.created_at,
+       COALESCE(
+         jsonb_agg(DISTINCT jsonb_build_object('product_id', e.product_id))
+           FILTER (WHERE e.product_id IS NOT NULL),
+         '[]'::jsonb
+       ) AS loyalty_earning_products,
+       COALESCE(
+         jsonb_agg(DISTINCT jsonb_build_object('product_id', r.product_id))
+           FILTER (WHERE r.product_id IS NOT NULL),
+         '[]'::jsonb
+       ) AS loyalty_reward_products
+     FROM public.loyalty_programs p
+     LEFT JOIN public.loyalty_earning_products e ON e.program_id = p.id
+     LEFT JOIN public.loyalty_reward_products r ON r.program_id = p.id
+     WHERE ($1::boolean = FALSE OR p.is_active = TRUE)
+     GROUP BY p.id
+     ORDER BY p.created_at ASC`,
+    [activeOnly]
+  );
+  return rows || [];
+}
+
 async function customerLoyalty(customerId){
-  const {data:programs,error}=await supabase.from("loyalty_programs").select("id,name,required_quantity,reward_quantity,is_active,loyalty_earning_products(product_id),loyalty_reward_products(product_id)").eq("is_active",true).order("created_at");
-  if(error)throw error;
-  const result=[];
-  for(const p of programs||[]){const {data:b,error:be}=await supabase.rpc("loyalty_balance",{p_customer_id:customerId,p_program_id:p.id});if(be)throw be;const balance=Array.isArray(b)?b[0]:b;result.push({...p,progress:Number(balance?.progress||0),rewards:Number(balance?.rewards||0)});}
+  const programs = await loadLoyaltyPrograms({ activeOnly: true });
+  const result = [];
+  for (const program of programs) {
+    const { rows } = await query(
+      `SELECT progress, rewards
+       FROM public.loyalty_balance($1::uuid, $2::uuid)`,
+      [customerId, program.id]
+    );
+    const balance = rows?.[0] || {};
+    result.push({
+      ...program,
+      progress: Number(balance.progress || 0),
+      rewards: Number(balance.rewards || 0)
+    });
+  }
   return result;
 }
 function customerSearchFilter(value) {
@@ -664,10 +705,10 @@ function customerSearchFilter(value) {
   const phone = normalizePhone(q);
   return phone ? { column: "normalized_phone", pattern: "%" + phone + "%" } : { column: "name", pattern: "%" + q + "%" };
 }
-app.get("/api/customers/search",async(req,res)=>{try{if(!await requireDevice(req,res))return;const q=String(req.query.q||"").trim();if(q.length<2)return res.json({customers:[]});const filter=customerSearchFilter(q);let query=supabase.from("customers").select("id,name,normalized_phone,telegram_user_id,telegram_username,last_purchase_at").limit(20);query=query.ilike(filter.column,filter.pattern);const {data,error}=await query;if(error)throw error;res.json({customers:data||[]});}catch(e){console.error("customer search",e);res.status(500).json({error:"Failed to search customers"})}});
-app.post("/api/customers",async(req,res)=>{try{if(!await requireDevice(req,res))return;const name=String(req.body?.name||"").trim(),phone=normalizePhone(req.body?.phone);if(!name||!phone)return res.status(400).json({error:"Name and phone are required"});const {data,error}=await supabase.from("customers").insert({name,normalized_phone:phone}).select("id,name,normalized_phone,telegram_user_id,telegram_username,last_purchase_at").single();if(error?.code==="23505")return res.status(409).json({error:"Customer already exists"});if(error)throw error;res.status(201).json({customer:data});}catch(e){console.error("customer create",e);res.status(500).json({error:"Failed to create customer"})}});
-app.get("/api/customers/:id/loyalty",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {data:customer,error}=await supabase.from("customers").select("id,name,normalized_phone,telegram_user_id,telegram_username,last_purchase_at").eq("id",req.params.id).maybeSingle();if(error)throw error;if(!customer)return res.status(404).json({error:"Customer not found"});res.json({customer,programs:await customerLoyalty(customer.id)});}catch(e){console.error("customer loyalty",e);res.status(500).json({error:"Failed to load loyalty"})}});
-app.get("/api/loyalty/programs",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {data,error}=await supabase.from("loyalty_programs").select("id,name,required_quantity,reward_quantity,is_active,loyalty_earning_products(product_id),loyalty_reward_products(product_id)").order("created_at");if(error)throw error;res.json({programs:data||[]});}catch(e){res.status(500).json({error:"Failed to load programs"})}});
+app.get("/api/customers/search",async(req,res)=>{try{if(!await requireDevice(req,res))return;const q=String(req.query.q||"").trim();if(q.length<2)return res.json({customers:[]});const filter=customerSearchFilter(q);const column=filter.column==="normalized_phone"?"normalized_phone":"name";const {rows}=await query(`SELECT id,name,normalized_phone,telegram_user_id,telegram_username,last_purchase_at FROM public.customers WHERE ${column} ILIKE $1 ORDER BY name ASC LIMIT 20`,[filter.pattern]);res.json({customers:rows||[]});}catch(e){console.error("customer search",e);res.status(500).json({error:"Failed to search customers"})}});
+app.post("/api/customers",async(req,res)=>{try{if(!await requireDevice(req,res))return;const name=String(req.body?.name||"").trim(),phone=normalizePhone(req.body?.phone);if(!name||!phone)return res.status(400).json({error:"Name and phone are required"});try{const {rows}=await query(`INSERT INTO public.customers (name,normalized_phone) VALUES ($1,$2) RETURNING id,name,normalized_phone,telegram_user_id,telegram_username,last_purchase_at`,[name,phone]);res.status(201).json({customer:rows[0]});}catch(error){if(error?.code==="23505")return res.status(409).json({error:"Customer already exists"});throw error}}catch(e){console.error("customer create",e);res.status(500).json({error:"Failed to create customer"})}});
+app.get("/api/customers/:id/loyalty",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {rows}=await query(`SELECT id,name,normalized_phone,telegram_user_id,telegram_username,last_purchase_at FROM public.customers WHERE id=$1::uuid LIMIT 1`,[req.params.id]);const customer=rows?.[0];if(!customer)return res.status(404).json({error:"Customer not found"});res.json({customer,programs:await customerLoyalty(customer.id)});}catch(e){console.error("customer loyalty",e);res.status(500).json({error:"Failed to load loyalty"})}});
+app.get("/api/loyalty/programs",async(req,res)=>{try{if(!await requireDevice(req,res))return;res.json({programs:await loadLoyaltyPrograms()});}catch(e){res.status(500).json({error:"Failed to load programs"})}});
 app.post("/api/loyalty/programs",async(req,res)=>{let createdProgramId="";try{if(!await requireDevice(req,res))return;const name=String(req.body?.name||"").trim(),required=Math.trunc(Number(req.body?.requiredQuantity)),reward=1;if(!name||required<1)return res.status(400).json({error:"Invalid loyalty program"});const {data:p,error}=await supabase.from("loyalty_programs").insert({name,required_quantity:required,reward_quantity:reward,is_active:req.body?.isActive!==false}).select().single();if(error)throw error;createdProgramId=p.id;const earning=[...new Set((req.body?.earningProductIds||[]).map(String))].map(product_id=>({program_id:p.id,product_id}));const rewards=[...new Set((req.body?.rewardProductIds||[]).map(String))].map(product_id=>({program_id:p.id,product_id}));if(earning.length){const {error:e}=await supabase.from("loyalty_earning_products").insert(earning);if(e)throw e}if(rewards.length){const {error:e}=await supabase.from("loyalty_reward_products").insert(rewards);if(e)throw e}res.status(201).json({program:p});}catch(e){console.error("loyalty program",e);if(createdProgramId){const cleanup=await supabase.from("loyalty_programs").delete().eq("id",createdProgramId);if(cleanup.error)console.error("loyalty program cleanup",cleanup.error)}res.status(500).json({error:"Failed to create program"})}});
 app.put("/api/loyalty/programs/:id",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim(),name=String(req.body?.name||"").trim(),required=Math.trunc(Number(req.body?.requiredQuantity)),reward=1,earningIds=[...new Set((req.body?.earningProductIds||[]).map(String))],rewardIds=[...new Set((req.body?.rewardProductIds||[]).map(String))];if(!id||!name||required<1||!earningIds.length||!rewardIds.length)return res.status(400).json({error:"Invalid loyalty program"});const {data:p,error}=await supabase.rpc("replace_loyalty_program",{p_program_id:id,p_name:name,p_required:required,p_reward:reward,p_is_active:req.body?.isActive!==false,p_earning_ids:earningIds,p_reward_ids:rewardIds});if(error)throw error;res.json({program:p});}catch(e){console.error("loyalty program update",e);res.status(500).json({error:"Failed to update program"})}});
 app.patch("/api/loyalty/programs/:id/active",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {data,error}=await supabase.from("loyalty_programs").update({is_active:Boolean(req.body?.isActive),updated_at:new Date().toISOString()}).eq("id",req.params.id).select().single();if(error)throw error;res.json({program:data});}catch(e){console.error("loyalty program active",e);res.status(500).json({error:"Failed to update program state"})}});
