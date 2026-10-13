@@ -1,8 +1,8 @@
 import express from "express";
 import { mountOwnerRoutes, ownerBotAuthorized } from "./owner-auth.js";
 import cors from "cors";
-import { createClient } from "@supabase/supabase-js";
 import { createHash, randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createPhoneVerificationService } from "./phone-verification.js";
 import { createCheckoutService } from "./checkout-service.js";
 import { createAvailabilityService } from "./availability-service.js";
@@ -40,46 +40,20 @@ app.use(express.static("public",{setHeaders(res,filePath){
 }}));
 
 const port = process.env.PORT || 3000;
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const deliveryFee = Number(process.env.DELIVERY_FEE || 0);
+const mediaRoot = process.env.PRODUCT_IMAGES_DIR || "/data/product-images";
 const siteSleepingNow=()=>typeof isSiteSleepWindow==="function"&&isSiteSleepWindow();
 const orderingOpenNow=()=>typeof isOrderingOpen!=="function"||isOrderingOpen();
 
-if (!supabaseUrl || !supabaseKey) {
-  console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
-  process.exit(1);
-}
-
-const supabase = createClient(supabaseUrl, supabaseKey);
 const newRevisionId=()=>typeof randomUUID==="function"?randomUUID().slice(0,8):"test";
 let catalogRevision=`boot-${Date.now().toString(36)}-${newRevisionId()}`;
 function advanceCatalogRevision(){catalogRevision=`sync-${Date.now().toString(36)}-${newRevisionId()}`;return catalogRevision}
-mountOwnerRoutes(app,{db:supabase});
-const phoneVerification = createPhoneVerificationService(supabase, normalizePhone);
+mountOwnerRoutes(app,{query});
+const phoneVerification = createPhoneVerificationService(query, normalizePhone);
 const availability = createAvailabilityService({ query });
-const checkout = createCheckoutService({ supabase, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee });
+const checkout = createCheckoutService({ query, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee });
 const telegramOrderAlerts = createTelegramOrderAlerts({ query, botToken: process.env.TELEGRAM_BOT_TOKEN });
 const livePosReports = createLivePosReports({ query, createId: () => randomUUID() });
-
-function missingOnlineMenuColumn(error) {
-  const message = String(error?.message || error?.details || "").toLowerCase();
-  return ["42703", "PGRST204"].includes(String(error?.code || "")) && message.includes("visible_in_menu");
-}
-
-function withoutOnlineMenuColumn(rows) {
-  return rows.map(({ visible_in_menu: _visibleInMenu, ...row }) => row);
-}
-
-function missingCategoryChannelColumn(error) {
-  const message = String(error?.message || error?.details || "").toLowerCase();
-  return ["42703", "PGRST204"].includes(String(error?.code || ""))
-    && (message.includes("available_online") || message.includes("visible_in_menu"));
-}
-
-function withoutCategoryChannelColumns(rows) {
-  return rows.map(({ available_online: _availableOnline, visible_in_menu: _visibleInMenu, ...row }) => row);
-}
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "prilavok-backend" }));
 
@@ -155,37 +129,23 @@ app.post("/api/phone-verification/:token/confirm", async (req, res) => {
   }
 });
 
+app.use("/media/products", express.static(mediaRoot, { immutable: true, maxAge: "7d" }));
 app.post("/api/media/upload", async (req, res) => {
   try {
-    const deviceKey = String(req.header("x-device-key") || req.body?.deviceKey || "").trim();
-    const productId = String(req.body?.productId || "").trim();
-    const dataUrl = String(req.body?.dataUrl || "").trim();
-    if (!deviceKey || !productId || !dataUrl) return res.status(400).json({ error: "Missing upload data" });
-    const { data: device, error: deviceError } = await supabase.from("devices").select("id").eq("device_key", deviceKey).eq("is_active", true).maybeSingle();
-    if (deviceError) throw deviceError;
-    if (!device) return res.status(401).json({ error: "Invalid device key" });
-    const match = dataUrl.match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/i);
-    if (!match) return res.status(400).json({ error: "Only JPEG, PNG or WebP images are supported" });
-    const mime = match[1].toLowerCase();
-    const buffer = Buffer.from(match[2], "base64");
-    if (!buffer.length || buffer.length > 1500000) return res.status(400).json({ error: "Image is too large" });
-    const bucket = "product-images";
-    const createBucket = await fetch(`${supabaseUrl}/storage/v1/bucket`, { method: "POST", headers: { Authorization: `Bearer ${supabaseKey}`, apikey: supabaseKey, "Content-Type": "application/json" }, body: JSON.stringify({ id: bucket, name: bucket, public: true }) });
-    if (!createBucket.ok) {
-      const txt = await createBucket.text(); let duplicate = createBucket.status === 409;
-      try { const body = JSON.parse(txt); duplicate = duplicate || body?.code === "BucketAlreadyExists" || Number(body?.statusCode) === 409; } catch (_) {}
-      if (!duplicate) throw new Error(`Storage bucket: ${createBucket.status} ${txt}`);
-    }
-    const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
-    const path = `products/${encodeURIComponent(productId)}.${ext}`;
-    const upload = await fetch(`${supabaseUrl}/storage/v1/object/${bucket}/${path}`, { method: "POST", headers: { Authorization: `Bearer ${supabaseKey}`, apikey: supabaseKey, "Content-Type": mime, "cache-control": "max-age=604800", "x-upsert": "true" }, body: buffer });
-    if (!upload.ok) throw new Error(`Storage upload: ${upload.status} ${await upload.text()}`);
+    const deviceKey=String(req.header("x-device-key")||req.body?.deviceKey||"").trim(),productId=String(req.body?.productId||"").trim(),dataUrl=String(req.body?.dataUrl||"").trim();
+    if(!deviceKey||!productId||!dataUrl)return res.status(400).json({error:"Missing upload data"});
+    const {rows:deviceRows}=await query(`SELECT id FROM public.devices WHERE device_key=$1 AND is_active=TRUE LIMIT 1`,[deviceKey]);
+    if(!deviceRows?.[0])return res.status(401).json({error:"Invalid device key"});
+    const match=dataUrl.match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/i);
+    if(!match)return res.status(400).json({error:"Only JPEG, PNG or WebP images are supported"});
+    const mime=match[1].toLowerCase(),buffer=Buffer.from(match[2],"base64");
+    if(!buffer.length||buffer.length>1500000)return res.status(400).json({error:"Image is too large"});
+    const ext=mime==="image/png"?"png":mime==="image/webp"?"webp":"jpg",fileName=`${encodeURIComponent(productId)}.${ext}`;
+    await mkdir(mediaRoot,{recursive:true});
+    await writeFile(`${mediaRoot}/${fileName}`,buffer);
     const imageVersion=createHash("sha256").update(buffer).digest("hex").slice(0,16);
-    return res.json({ ok: true, url: `${supabaseUrl}/storage/v1/object/public/${bucket}/${path}?v=${imageVersion}` });
-  } catch (error) {
-    console.error("POST /api/media/upload:", error);
-    return res.status(500).json({ error: "Failed to upload image" });
-  }
+    return res.json({ok:true,url:`/media/products/${fileName}?v=${imageVersion}`});
+  } catch(error){console.error("POST /api/media/upload:",error);return res.status(500).json({error:"Failed to upload image"});}
 });
 
 app.post("/api/menu/sync", async (req, res) => {
@@ -534,7 +494,12 @@ async function pushNewOrders(){
     eventClients.clear();return;
   }
   if(eventPollBusy || !eventClients.size) return; eventPollBusy = true;
-  try { const { data, error } = await supabase.from("orders").select("id,external_id,status,order_type,customer_id,customer_name,phone,address,comment,total,delivery_fee,created_at,updated_at,order_items(id,product_id,external_product_id,product_name,price,quantity,comment)").eq("status", "new").order("created_at", { ascending: false }).limit(20); if(error) throw error; const payload = JSON.stringify({type:"orders",orders:data||[]}); for(const client of eventClients){ try { client.res.write(`data: ${payload}\n\n`); } catch(e) {} } }
+  try {
+    const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.customer_id,o.customer_name,o.phone,o.address,o.comment,o.total,o.delivery_fee,o.created_at,o.updated_at,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('id',i.id,'product_id',i.product_id,'external_product_id',i.external_product_id,'product_name',i.product_name,'price',i.price,'quantity',i.quantity,'comment',i.comment) ORDER BY i.created_at,i.id) FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS order_items
+      FROM public.orders o WHERE o.status='new' ORDER BY o.created_at DESC LIMIT 20`);
+    const payload=JSON.stringify({type:"orders",orders:rows||[]});for(const client of eventClients){try{client.res.write(`data: ${payload}\n\n`);}catch(e){}}
+  }
   catch(error){ console.error("order event poll:", error); } finally { eventPollBusy = false; }
 }
 setInterval(pushNewOrders, 2000);
@@ -709,10 +674,10 @@ app.get("/api/customers/search",async(req,res)=>{try{if(!await requireDevice(req
 app.post("/api/customers",async(req,res)=>{try{if(!await requireDevice(req,res))return;const name=String(req.body?.name||"").trim(),phone=normalizePhone(req.body?.phone);if(!name||!phone)return res.status(400).json({error:"Name and phone are required"});try{const {rows}=await query(`INSERT INTO public.customers (name,normalized_phone) VALUES ($1,$2) RETURNING id,name,normalized_phone,telegram_user_id,telegram_username,last_purchase_at`,[name,phone]);res.status(201).json({customer:rows[0]});}catch(error){if(error?.code==="23505")return res.status(409).json({error:"Customer already exists"});throw error}}catch(e){console.error("customer create",e);res.status(500).json({error:"Failed to create customer"})}});
 app.get("/api/customers/:id/loyalty",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {rows}=await query(`SELECT id,name,normalized_phone,telegram_user_id,telegram_username,last_purchase_at FROM public.customers WHERE id=$1::uuid LIMIT 1`,[req.params.id]);const customer=rows?.[0];if(!customer)return res.status(404).json({error:"Customer not found"});res.json({customer,programs:await customerLoyalty(customer.id)});}catch(e){console.error("customer loyalty",e);res.status(500).json({error:"Failed to load loyalty"})}});
 app.get("/api/loyalty/programs",async(req,res)=>{try{if(!await requireDevice(req,res))return;res.json({programs:await loadLoyaltyPrograms()});}catch(e){res.status(500).json({error:"Failed to load programs"})}});
-app.post("/api/loyalty/programs",async(req,res)=>{let createdProgramId="";try{if(!await requireDevice(req,res))return;const name=String(req.body?.name||"").trim(),required=Math.trunc(Number(req.body?.requiredQuantity)),reward=1;if(!name||required<1)return res.status(400).json({error:"Invalid loyalty program"});const {data:p,error}=await supabase.from("loyalty_programs").insert({name,required_quantity:required,reward_quantity:reward,is_active:req.body?.isActive!==false}).select().single();if(error)throw error;createdProgramId=p.id;const earning=[...new Set((req.body?.earningProductIds||[]).map(String))].map(product_id=>({program_id:p.id,product_id}));const rewards=[...new Set((req.body?.rewardProductIds||[]).map(String))].map(product_id=>({program_id:p.id,product_id}));if(earning.length){const {error:e}=await supabase.from("loyalty_earning_products").insert(earning);if(e)throw e}if(rewards.length){const {error:e}=await supabase.from("loyalty_reward_products").insert(rewards);if(e)throw e}res.status(201).json({program:p});}catch(e){console.error("loyalty program",e);if(createdProgramId){const cleanup=await supabase.from("loyalty_programs").delete().eq("id",createdProgramId);if(cleanup.error)console.error("loyalty program cleanup",cleanup.error)}res.status(500).json({error:"Failed to create program"})}});
-app.put("/api/loyalty/programs/:id",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim(),name=String(req.body?.name||"").trim(),required=Math.trunc(Number(req.body?.requiredQuantity)),reward=1,earningIds=[...new Set((req.body?.earningProductIds||[]).map(String))],rewardIds=[...new Set((req.body?.rewardProductIds||[]).map(String))];if(!id||!name||required<1||!earningIds.length||!rewardIds.length)return res.status(400).json({error:"Invalid loyalty program"});const {data:p,error}=await supabase.rpc("replace_loyalty_program",{p_program_id:id,p_name:name,p_required:required,p_reward:reward,p_is_active:req.body?.isActive!==false,p_earning_ids:earningIds,p_reward_ids:rewardIds});if(error)throw error;res.json({program:p});}catch(e){console.error("loyalty program update",e);res.status(500).json({error:"Failed to update program"})}});
-app.patch("/api/loyalty/programs/:id/active",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {data,error}=await supabase.from("loyalty_programs").update({is_active:Boolean(req.body?.isActive),updated_at:new Date().toISOString()}).eq("id",req.params.id).select().single();if(error)throw error;res.json({program:data});}catch(e){console.error("loyalty program active",e);res.status(500).json({error:"Failed to update program state"})}});
-app.delete("/api/loyalty/programs/:id",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim();if(!id)return res.status(400).json({error:"Missing loyalty program"});const {count,error:ledgerError}=await supabase.from("loyalty_ledger").select("id",{count:"exact",head:true}).eq("program_id",id);if(ledgerError)throw ledgerError;if(Number(count||0)>0)return res.status(409).json({error:"Program has loyalty history and cannot be deleted. Disable it instead."});const {error}=await supabase.from("loyalty_programs").delete().eq("id",id);if(error)throw error;res.json({ok:true});}catch(e){console.error("loyalty program delete",e);res.status(500).json({error:"Failed to delete program"})}});
+app.post("/api/loyalty/programs",async(req,res)=>{try{if(!await requireDevice(req,res))return;const name=String(req.body?.name||"").trim(),required=Math.trunc(Number(req.body?.requiredQuantity)),earningIds=[...new Set((req.body?.earningProductIds||[]).map(String))],rewardIds=[...new Set((req.body?.rewardProductIds||[]).map(String))];if(!name||required<1)return res.status(400).json({error:"Invalid loyalty program"});const program=await withTransaction(async client=>{const {rows}=await client.query(`INSERT INTO public.loyalty_programs(name,required_quantity,reward_quantity,is_active) VALUES($1,$2,1,$3) RETURNING *`,[name,required,req.body?.isActive!==false]);const p=rows[0];for(const id of earningIds)await client.query(`INSERT INTO public.loyalty_earning_products(program_id,product_id) VALUES($1::uuid,$2)`,[p.id,id]);for(const id of rewardIds)await client.query(`INSERT INTO public.loyalty_reward_products(program_id,product_id) VALUES($1::uuid,$2)`,[p.id,id]);return p;});res.status(201).json({program});}catch(e){console.error("loyalty program",e);res.status(500).json({error:"Failed to create program"})}});
+app.put("/api/loyalty/programs/:id",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim(),name=String(req.body?.name||"").trim(),required=Math.trunc(Number(req.body?.requiredQuantity)),earningIds=[...new Set((req.body?.earningProductIds||[]).map(String))],rewardIds=[...new Set((req.body?.rewardProductIds||[]).map(String))];if(!id||!name||required<1||!earningIds.length||!rewardIds.length)return res.status(400).json({error:"Invalid loyalty program"});const {rows}=await query(`SELECT public.replace_loyalty_program($1::uuid,$2,$3,1,$4,$5::text[],$6::text[]) AS program`,[id,name,required,req.body?.isActive!==false,earningIds,rewardIds]);res.json({program:rows?.[0]?.program});}catch(e){console.error("loyalty program update",e);res.status(500).json({error:"Failed to update program"})}});
+app.patch("/api/loyalty/programs/:id/active",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {rows}=await query(`UPDATE public.loyalty_programs SET is_active=$2,updated_at=now() WHERE id=$1::uuid RETURNING *`,[req.params.id,Boolean(req.body?.isActive)]);if(!rows?.[0])return res.status(404).json({error:"Program not found"});res.json({program:rows[0]});}catch(e){console.error("loyalty program active",e);res.status(500).json({error:"Failed to update program state"})}});
+app.delete("/api/loyalty/programs/:id",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim();if(!id)return res.status(400).json({error:"Missing loyalty program"});const {rows:counts}=await query(`SELECT count(*)::integer AS count FROM public.loyalty_ledger WHERE program_id=$1::uuid`,[id]);if(Number(counts?.[0]?.count||0)>0)return res.status(409).json({error:"Program has loyalty history and cannot be deleted. Disable it instead."});await query(`DELETE FROM public.loyalty_programs WHERE id=$1::uuid`,[id]);res.json({ok:true});}catch(e){console.error("loyalty program delete",e);res.status(500).json({error:"Failed to delete program"})}});
 
 
 app.post("/api/loyalty/sales",async(req,res)=>{
@@ -731,14 +696,12 @@ app.post("/api/loyalty/sales",async(req,res)=>{
       const redeem=allocation.allocatedByProgram.get(String(p.id))||0;
       if(!earned&&!redeem)continue;
       const key=loyaltyIdempotencyKey(orderId,p.id,"sale");
-      const {data,error}=await supabase.rpc("apply_loyalty_sale",{p_customer_id:customerId,p_program_id:p.id,p_idempotency_key:key,p_pos_order_id:orderId,p_earned:earned,p_redeem:redeem,p_required:p.required_quantity,p_reward_each:p.reward_quantity});
-      if(error){if(String(error.message||"").includes("INSUFFICIENT_LOYALTY_REWARDS"))return res.status(409).json({error:"Insufficient loyalty rewards",programId:p.id});throw error}
-      const x=Array.isArray(data)?data[0]:data;
+      let x;try{const {rows}=await query(`SELECT * FROM public.apply_loyalty_sale($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8)`,[customerId,p.id,key,orderId,earned,redeem,p.required_quantity,p.reward_quantity]);x=rows?.[0];}catch(error){if(String(error.message||"").includes("INSUFFICIENT_LOYALTY_REWARDS"))return res.status(409).json({error:"Insufficient loyalty rewards",programId:p.id});throw error}
       events.push({programId:p.id,earned,redeemed:Number(x?.redeemed||0),granted:Number(x?.granted||0),progress:Number(x?.progress||0),rewards:Number(x?.rewards||0),duplicate:Boolean(x?.duplicate)});
     }
-    await supabase.from("customers").update({last_purchase_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq("id",customerId);
+    await query(`UPDATE public.customers SET last_purchase_at=now(),updated_at=now() WHERE id=$1::uuid`,[customerId]);
     const finalPrograms=await customerLoyalty(customerId);
-    const {data:customer}=await supabase.from("customers").select("telegram_user_id").eq("id",customerId).maybeSingle();
+    const {rows:customerRows}=await query(`SELECT telegram_user_id FROM public.customers WHERE id=$1::uuid LIMIT 1`,[customerId]);const customer=customerRows?.[0];
     res.json({ok:true,events,programs:finalPrograms,telegramUserId:customer?.telegram_user_id||null,loyaltyMessage:formatLoyaltySaleMessage(events,finalPrograms)});
   }catch(e){console.error("loyalty sale",e);res.status(500).json({error:"Failed to apply loyalty"})}
 });
@@ -748,16 +711,15 @@ app.post("/api/loyalty/reversal",async(req,res)=>{
     if(!await requireDevice(req,res))return;
     const orderId=String(req.body?.orderId||"").trim(),customerId=String(req.body?.customerId||"").trim();
     if(!orderId||!customerId)return res.status(400).json({error:"Missing reversal identity"});
-    const {data,error}=await supabase.rpc("apply_single_reward_reversal",{p_customer_id:customerId,p_pos_order_id:orderId});
-    if(error)throw error;
-    res.json({ok:true,reversed:Number(data||0),programs:await customerLoyalty(customerId)});
+    const {rows}=await query(`SELECT public.apply_single_reward_reversal($1::uuid,$2) AS reversed`,[customerId,orderId]);
+    res.json({ok:true,reversed:Number(rows?.[0]?.reversed||0),programs:await customerLoyalty(customerId)});
   }catch(e){console.error("loyalty reversal",e);res.status(500).json({error:"Failed to reverse loyalty"})}
 });
 
-app.get("/api/analytics/loyalty",async(req,res)=>{try{if(!await requireDevice(req,res))return;const from=String(req.query?.from||"").trim(),to=String(req.query?.to||"").trim();if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to))return res.status(400).json({error:"Invalid analytics range"});const start=from+"T00:00:00.000Z",end=new Date(to+"T00:00:00.000Z");end.setUTCDate(end.getUTCDate()+1);const endIso=end.toISOString();const [{data:orders,error:oe},{data:ledger,error:le},{data:customers,error:ce}]=await Promise.all([supabase.from("orders").select("id,customer_id,total,status,created_at").not("customer_id","is",null).gte("created_at",start).lt("created_at",endIso),supabase.from("loyalty_ledger").select("customer_id,operation_type,reward_delta,metadata,created_at").gte("created_at",start).lt("created_at",endIso),supabase.from("customers").select("id,created_at")]);if(oe)throw oe;if(le)throw le;if(ce)throw ce;const paid=(orders||[]).filter(x=>!["cancelled","canceled"].includes(String(x.status||"").toLowerCase())),customerIds=new Set(paid.map(x=>x.customer_id)),newCustomers=(customers||[]).filter(x=>x.created_at>=start&&x.created_at<endIso).length,repeatCustomers=[...customerIds].filter(id=>paid.filter(x=>x.customer_id===id).length>1).length,customerRevenue=paid.reduce((s,x)=>s+Number(x.total||0),0),granted=(ledger||[]).filter(x=>x.operation_type==="REWARD_GRANTED").reduce((s,x)=>s+Math.max(0,Number(x.reward_delta||0)),0),redeemed=(ledger||[]).filter(x=>x.operation_type==="REWARD_REDEEMED").reduce((s,x)=>s+Math.max(0,-Number(x.reward_delta||0)),0),activeLoyalty=new Set((ledger||[]).filter(x=>["EARN","REWARD_GRANTED","REWARD_REDEEMED"].includes(x.operation_type)).map(x=>x.customer_id)).size;res.json({customers:customerIds.size,newCustomers,repeatCustomers,customerOrders:paid.length,customerRevenue,averageCustomerCheck:paid.length?customerRevenue/paid.length:0,activeLoyaltyUsers:activeLoyalty,rewardsGranted:granted,rewardsRedeemed:redeemed});}catch(e){console.error("loyalty analytics",e);res.status(500).json({error:"Failed to load loyalty analytics"})}});
+app.get("/api/analytics/loyalty",async(req,res)=>{try{if(!await requireDevice(req,res))return;const from=String(req.query?.from||"").trim(),to=String(req.query?.to||"").trim();if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to))return res.status(400).json({error:"Invalid analytics range"});const start=from+"T00:00:00.000Z",end=new Date(to+"T00:00:00.000Z");end.setUTCDate(end.getUTCDate()+1);const endIso=end.toISOString();const [{rows:orders},{rows:ledger},{rows:customers}]=await Promise.all([query(`SELECT id,customer_id,total,status,created_at FROM public.orders WHERE customer_id IS NOT NULL AND created_at >= $1::timestamptz AND created_at < $2::timestamptz`,[start,endIso]),query(`SELECT customer_id,operation_type,reward_delta,metadata,created_at FROM public.loyalty_ledger WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz`,[start,endIso]),query(`SELECT id,created_at FROM public.customers`)]);const paid=(orders||[]).filter(x=>!["cancelled","canceled"].includes(String(x.status||"").toLowerCase())),customerIds=new Set(paid.map(x=>x.customer_id)),newCustomers=(customers||[]).filter(x=>new Date(x.created_at)>=new Date(start)&&new Date(x.created_at)<new Date(endIso)).length,repeatCustomers=[...customerIds].filter(id=>paid.filter(x=>x.customer_id===id).length>1).length,customerRevenue=paid.reduce((sum,x)=>sum+Number(x.total||0),0),granted=(ledger||[]).filter(x=>x.operation_type==="REWARD_GRANTED").reduce((sum,x)=>sum+Math.max(0,Number(x.reward_delta||0)),0),redeemed=(ledger||[]).filter(x=>x.operation_type==="REWARD_REDEEMED").reduce((sum,x)=>sum+Math.max(0,-Number(x.reward_delta||0)),0),activeLoyalty=new Set((ledger||[]).filter(x=>["EARN","REWARD_GRANTED","REWARD_REDEEMED"].includes(x.operation_type)).map(x=>x.customer_id)).size;res.json({customers:customerIds.size,newCustomers,repeatCustomers,customerOrders:paid.length,customerRevenue,averageCustomerCheck:paid.length?customerRevenue/paid.length:0,activeLoyaltyUsers:activeLoyalty,rewardsGranted:granted,rewardsRedeemed:redeemed});}catch(e){console.error("loyalty analytics",e);res.status(500).json({error:"Failed to load loyalty analytics"})}});
 
-app.get("/api/customers/:id/orders",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {data,error}=await supabase.from("orders").select("id,external_id,status,total,created_at,order_items(product_name,quantity,price)").eq("customer_id",req.params.id).order("created_at",{ascending:false}).limit(100);if(error)throw error;res.json({orders:data||[]});}catch(e){console.error("customer orders",e);res.status(500).json({error:"Failed to load customer orders"})}});
-app.get("/api/customers/:id/ledger",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {data,error}=await supabase.from("loyalty_ledger").select("id,program_id,operation_type,progress_delta,reward_delta,metadata,created_at,loyalty_programs(name)").eq("customer_id",req.params.id).order("created_at",{ascending:false}).limit(100);if(error)throw error;res.json({ledger:data||[]});}catch(e){console.error("loyalty ledger",e);res.status(500).json({error:"Failed to load loyalty ledger"})}});
+app.get("/api/customers/:id/orders",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.total,o.created_at,COALESCE((SELECT jsonb_agg(jsonb_build_object('product_name',i.product_name,'quantity',i.quantity,'price',i.price) ORDER BY i.created_at,i.id) FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS order_items FROM public.orders o WHERE o.customer_id=$1::uuid ORDER BY o.created_at DESC LIMIT 100`,[req.params.id]);res.json({orders:rows||[]});}catch(e){console.error("customer orders",e);res.status(500).json({error:"Failed to load customer orders"})}});
+app.get("/api/customers/:id/ledger",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {rows}=await query(`SELECT l.id,l.program_id,l.operation_type,l.progress_delta,l.reward_delta,l.metadata,l.created_at,jsonb_build_object('name',p.name) AS loyalty_programs FROM public.loyalty_ledger l JOIN public.loyalty_programs p ON p.id=l.program_id WHERE l.customer_id=$1::uuid ORDER BY l.created_at DESC LIMIT 100`,[req.params.id]);res.json({ledger:rows||[]});}catch(e){console.error("loyalty ledger",e);res.status(500).json({error:"Failed to load loyalty ledger"})}});
 app.post("/api/customers/:id/loyalty-adjustment",async(req,res)=>{
   try{
     if(!await requireDevice(req,res))return;
@@ -765,8 +727,7 @@ app.post("/api/customers/:id/loyalty-adjustment",async(req,res)=>{
     if(!process.env.POS_ADMIN_PASSWORD||adminPassword!==process.env.POS_ADMIN_PASSWORD)return res.status(403).json({error:"Administrator authorization required"});
     if(!programId||!reason||!adminEmployeeId||!adminEmployeeName||(!progressDelta&&!rewardDelta))return res.status(400).json({error:"Program, reason, administrator and adjustment are required"});
     const key=`manual:${req.params.id}:${programId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-    const {error}=await supabase.rpc("apply_single_reward_adjustment",{p_customer_id:req.params.id,p_program_id:programId,p_progress_delta:progressDelta,p_reward_delta:rewardDelta,p_idempotency_key:key,p_metadata:{reason,adminEmployeeId,adminEmployeeName}});
-    if(error){if(String(error.message||"").includes("INVALID_SINGLE_REWARD_BALANCE"))return res.status(409).json({error:"Loyalty balance must contain at most one reward and no progress while it is available"});throw error}
+    try{await query(`SELECT * FROM public.apply_single_reward_adjustment($1::uuid,$2::uuid,$3,$4,$5,$6::jsonb)`,[req.params.id,programId,progressDelta,rewardDelta,key,JSON.stringify({reason,adminEmployeeId,adminEmployeeName})]);}catch(error){if(String(error.message||"").includes("INVALID_SINGLE_REWARD_BALANCE"))return res.status(409).json({error:"Loyalty balance must contain at most one reward and no progress while it is available"});throw error}
     res.json({ok:true,programs:await customerLoyalty(req.params.id)});
   }catch(e){console.error("loyalty adjustment",e);res.status(500).json({error:"Failed to adjust loyalty"})}
 });
