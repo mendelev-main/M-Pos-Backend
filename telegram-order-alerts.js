@@ -2,7 +2,7 @@ export const ONLINE_ORDER_ALERT_TEXT = "Получен онлайн заказ �
 
 const workDeviceChatId = value => /^\d{1,20}$/.test(String(value || "").trim());
 
-export function createTelegramOrderAlerts({ supabase, botToken, fetchImpl = fetch }) {
+export function createTelegramOrderAlerts({ query, botToken, fetchImpl = fetch }) {
   async function configure(deviceId, { chatId, ownerChatId, enabled }) {
     const normalizedChatId = String(chatId || "").trim();
     if (enabled && !workDeviceChatId(normalizedChatId)) {
@@ -13,25 +13,35 @@ export function createTelegramOrderAlerts({ supabase, botToken, fetchImpl = fetc
       return { error: "Укажите корректный Telegram ID владельца", status: 400 };
     }
     const storedChatId = workDeviceChatId(normalizedChatId) ? normalizedChatId : null;
-    const update = {
-      telegram_order_chat_id: storedChatId,
-      notify_online_orders: Boolean(enabled),
-    };
-    if (normalizedOwnerChatId !== undefined) update.telegram_owner_chat_id = normalizedOwnerChatId || null;
-    const { error } = await supabase.from("devices").update(update).eq("id", deviceId);
-    if (error) throw error;
+    const fields = [
+      "telegram_order_chat_id = $1",
+      "notify_online_orders = $2",
+    ];
+    const params = [storedChatId, Boolean(enabled)];
+    if (normalizedOwnerChatId !== undefined) {
+      fields.push(`telegram_owner_chat_id = ${params.length + 1}`);
+      params.push(normalizedOwnerChatId || null);
+    }
+    params.push(deviceId);
+    await query(
+      `UPDATE public.devices
+       SET ${fields.join(", ")}
+       WHERE id = ${params.length}::uuid`,
+      params
+    );
     return { ok: true, enabled: Boolean(enabled), chatId: storedChatId || "", ownerChatId: normalizedOwnerChatId || "" };
   }
 
   async function notifyNewOrder() {
     if (!botToken) return { sent: 0, skipped: "missing_bot_token" };
-    const { data, error } = await supabase.from("devices")
-      .select("telegram_order_chat_id")
-      .eq("is_active", true)
-      .eq("notify_online_orders", true)
-      .not("telegram_order_chat_id", "is", null);
-    if (error) throw error;
-    const chatIds = [...new Set((data || []).map(row => String(row.telegram_order_chat_id || "").trim()).filter(workDeviceChatId))];
+    const { rows } = await query(
+      `SELECT telegram_order_chat_id
+       FROM public.devices
+       WHERE is_active = TRUE
+         AND notify_online_orders = TRUE
+         AND telegram_order_chat_id IS NOT NULL`
+    );
+    const chatIds = [...new Set((rows || []).map(row => String(row.telegram_order_chat_id || "").trim()).filter(workDeviceChatId))];
     const results = await Promise.allSettled(chatIds.map(async chatId => {
       const response = await fetchImpl(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: "POST",

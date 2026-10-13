@@ -59,8 +59,8 @@ mountOwnerRoutes(app,{db:supabase});
 const phoneVerification = createPhoneVerificationService(supabase, normalizePhone);
 const availability = createAvailabilityService({ query });
 const checkout = createCheckoutService({ supabase, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee });
-const telegramOrderAlerts = createTelegramOrderAlerts({ supabase, botToken: process.env.TELEGRAM_BOT_TOKEN });
-const livePosReports = createLivePosReports({ supabase, createId: () => randomUUID() });
+const telegramOrderAlerts = createTelegramOrderAlerts({ query, botToken: process.env.TELEGRAM_BOT_TOKEN });
+const livePosReports = createLivePosReports({ query, createId: () => randomUUID() });
 
 function missingOnlineMenuColumn(error) {
   const message = String(error?.message || error?.details || "").toLowerCase();

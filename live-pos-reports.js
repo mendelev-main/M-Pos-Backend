@@ -44,21 +44,23 @@ export function sanitizeLivePosReport(value) {
   };
 }
 
-export function createLivePosReports({ supabase, createId, timeoutMs = 8000 }) {
+export function createLivePosReports({ query, createId, timeoutMs = 8000 }) {
   const pending = new Map();
 
   async function ownerDevice(telegramId) {
     const normalized = String(telegramId || "").trim();
     if (!telegramIdPattern.test(normalized)) throw serviceError("Доступ запрещён", 403, "OWNER_FORBIDDEN");
-    const { data, error } = await supabase.from("devices")
-      .select("id")
-      .eq("is_active", true)
-      .eq("telegram_owner_chat_id", normalized)
-      .limit(1)
-      .maybeSingle();
-    if (error) throw error;
-    if (!data) throw serviceError("Доступ запрещён", 403, "OWNER_FORBIDDEN");
-    return data;
+    const { rows } = await query(
+      `SELECT id
+       FROM public.devices
+       WHERE is_active = TRUE
+         AND telegram_owner_chat_id = $1
+       LIMIT 1`,
+      [normalized]
+    );
+    const device = rows?.[0];
+    if (!device) throw serviceError("Доступ запрещён", 403, "OWNER_FORBIDDEN");
+    return device;
   }
 
   async function access(telegramId) {
