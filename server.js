@@ -240,8 +240,15 @@ const OPERATIONAL_FRESH_MS = Number(process.env.OPERATIONAL_FRESH_MS || 45000);
 async function operationalDevice(req) {
   const deviceKey = String(req.header("x-device-key") || "").trim();
   if (!deviceKey) return { error: "Missing device key", status: 401 };
-  const { data: device, error } = await supabase.from("devices").select("id,device_key,name,is_active").eq("device_key", deviceKey).eq("is_active", true).maybeSingle();
-  if (error) throw error;
+  const { rows } = await query(
+    `SELECT id, device_key, name, is_active
+     FROM public.devices
+     WHERE device_key = $1
+       AND is_active = TRUE
+     LIMIT 1`,
+    [deviceKey]
+  );
+  const device = rows?.[0];
   if (!device) return { error: "Invalid device key", status: 401 };
   return { device };
 }
@@ -256,9 +263,17 @@ app.post("/api/operational/heartbeat", async (req, res) => {
     const receivedAt = new Date().toISOString();
     const sampledAt = new Date(req.body?.sampledAt || receivedAt);
     if (Number.isNaN(sampledAt.getTime())) return res.status(400).json({ error: "Invalid sampledAt" });
-    const row = { device_id: auth.device.id, schema_version: OPERATIONAL_SCHEMA_VERSION, engine_version: null, heartbeat_at: receivedAt, updated_at: receivedAt };
-    const { error } = await supabase.from("operational_states").upsert(row, { onConflict: "device_id" });
-    if (error) throw error;
+    await query(
+      `INSERT INTO public.operational_states
+         (device_id, schema_version, engine_version, heartbeat_at, updated_at)
+       VALUES ($1::uuid, $2::integer, NULL, $3::timestamptz, $3::timestamptz)
+       ON CONFLICT (device_id) DO UPDATE SET
+         schema_version = EXCLUDED.schema_version,
+         engine_version = EXCLUDED.engine_version,
+         heartbeat_at = EXCLUDED.heartbeat_at,
+         updated_at = EXCLUDED.updated_at`,
+      [auth.device.id, OPERATIONAL_SCHEMA_VERSION, receivedAt]
+    );
     return res.json({ ok: true, receivedAt });
   } catch (error) {
     console.error("POST /api/operational/heartbeat:", error);
@@ -274,9 +289,20 @@ app.post("/api/operational/snapshot", async (req, res) => {
     const receivedAt = new Date().toISOString(),sampledAt = new Date(req.body?.sampledAt || receivedAt),revision=Number(req.body?.revision);
     if (Number.isNaN(sampledAt.getTime())) return res.status(400).json({ error: "Invalid sampledAt" });
     if (!Number.isSafeInteger(revision) || revision <= 0) return res.status(400).json({ error: "Invalid snapshot revision" });
-    const { data: applied, error } = await supabase.rpc("store_operational_snapshot",{p_device_id:auth.device.id,p_schema_version:OPERATIONAL_SCHEMA_VERSION,p_engine_version:null,p_revision:revision,p_sampled_at:sampledAt.toISOString(),p_received_at:receivedAt,p_snapshot:req.body});
-    if (error) throw error;
-    return res.json({ ok: true, applied: applied===true, ignoredAsStale: applied!==true, revision, receivedAt });
+    const { rows } = await query(
+      `SELECT public.store_operational_snapshot(
+         $1::uuid,
+         $2::integer,
+         NULL::integer,
+         $3::bigint,
+         $4::timestamptz,
+         $5::timestamptz,
+         $6::jsonb
+       ) AS applied`,
+      [auth.device.id, OPERATIONAL_SCHEMA_VERSION, revision, sampledAt.toISOString(), receivedAt, JSON.stringify(req.body)]
+    );
+    const applied = rows?.[0]?.applied === true;
+    return res.json({ ok: true, applied, ignoredAsStale: !applied, revision, receivedAt });
   } catch (error) {
     console.error("POST /api/operational/snapshot:", error);
     return res.status(500).json({ error: "Failed to store operational snapshot" });
@@ -286,8 +312,15 @@ app.get("/api/operational/state", async (req, res) => {
   try {
     const auth = await operationalDevice(req);
     if (auth.error) return res.status(auth.status).json({ error: auth.error });
-    const { data, error } = await supabase.from("operational_states").select("schema_version,heartbeat_at,snapshot_sampled_at,snapshot_received_at,snapshot_revision,snapshot,updated_at").eq("device_id", auth.device.id).maybeSingle();
-    if (error) throw error;
+    const { rows } = await query(
+      `SELECT schema_version, heartbeat_at, snapshot_sampled_at, snapshot_received_at,
+              snapshot_revision, snapshot, updated_at
+       FROM public.operational_states
+       WHERE device_id = $1::uuid
+       LIMIT 1`,
+      [auth.device.id]
+    );
+    const data = rows?.[0];
     if (!data) return res.json({ available: false, fresh: false, reason: "missing", freshnessMs: null, state: null });
     const now=Date.now(),heartbeatAt=data.heartbeat_at?new Date(data.heartbeat_at).getTime():0,sampledAt=data.snapshot_sampled_at?new Date(data.snapshot_sampled_at).getTime():0,receivedAt=data.snapshot_received_at?new Date(data.snapshot_received_at).getTime():0;
     const freshnessMs=heartbeatAt?Math.max(0,now-heartbeatAt):null,snapshotAgeMs=sampledAt?now-sampledAt:null,snapshotReceivedAgeMs=receivedAt?Math.max(0,now-receivedAt):null;
@@ -305,19 +338,24 @@ app.get("/api/operational/state", async (req, res) => {
 
 const DEMAND_STATUS_VALID_FOR_SECONDS = 45;
 async function latestStoredDemandState() {
-  const { data: devices, error: deviceError } = await supabase.from("devices").select("id").eq("is_active", true);
-  if (deviceError) throw deviceError;
+  const { rows: devices } = await query(
+    `SELECT id
+     FROM public.devices
+     WHERE is_active = TRUE
+     ORDER BY id`
+  );
   const ids = (devices || []).map(x=>x.id);
   if (!ids.length) return { available:false, reason:"missing" };
   // v1 has one location/POS identity. Never guess between multiple active devices.
   if (ids.length !== 1) return { available:false, reason:"ambiguous_location" };
-  const { data: rows, error } = await supabase
-    .from("operational_states")
-    .select("device_id,schema_version,snapshot_received_at,snapshot")
-    .in("device_id", ids)
-    .order("snapshot_received_at",{ascending:false})
-    .limit(10);
-  if (error) throw error;
+  const { rows } = await query(
+    `SELECT device_id, schema_version, snapshot_received_at, snapshot
+     FROM public.operational_states
+     WHERE device_id = $1::uuid
+     ORDER BY snapshot_received_at DESC NULLS LAST
+     LIMIT 10`,
+    [ids[0]]
+  );
   for (const row of (rows || [])) {
     const compatible = Number(row.schema_version) === OPERATIONAL_SCHEMA_VERSION
       && Number(row.snapshot?.schemaVersion) === OPERATIONAL_SCHEMA_VERSION
