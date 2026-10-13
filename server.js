@@ -11,7 +11,7 @@ import { validateLoyaltyAllocation } from "./loyalty-allocation.js";
 import { closedPageHtml, isOrderingOpen, isSiteSleepWindow, millisecondsUntilSiteWake, VENUE_TIME_ZONE } from "./business-hours.js";
 import { createTelegramOrderAlerts } from "./telegram-order-alerts.js";
 import { createLivePosReports } from "./live-pos-reports.js";
-import { query } from "./db/index.js";
+import { query, withTransaction } from "./db/index.js";
 
 import "./public/order-validation.js";
 const { validate: validateOrderContact, normalizePhone } = globalThis.OrderValidation;
@@ -195,35 +195,133 @@ app.post("/api/menu/sync", async (req, res) => {
     const categories = Array.isArray(req.body?.categories) ? req.body.categories : [];
     const products = Array.isArray(req.body?.products) ? req.body.products : [];
     if (!deviceKey) return res.status(401).json({ error: "Missing device key" });
-    const { data: device, error: deviceError } = await supabase.from("devices").upsert({ device_key: deviceKey, name: deviceName || "Прилавок iPad", is_active: true, last_sync_at: new Date().toISOString() }, { onConflict: "device_key" }).select("id").single();
-    if (deviceError) throw deviceError;
-    const categoryRows = categories.map((c, index) => ({ external_id: String(c.externalId || `category:${String(c.name || "").trim()}`), name: String(c.name || "").trim(), color: c.color ? String(c.color) : null, sort_order: Number.isFinite(Number(c.sortOrder)) ? Number(c.sortOrder) : index, is_active: c.isActive !== false, available_online: c.availableOnline !== false, visible_in_menu: c.visibleInOnlineMenu !== false })).filter(c => c.name && c.external_id);
-    if (categoryRows.length) {
-      let { error } = await supabase.from("categories").upsert(categoryRows, { onConflict: "external_id" });
-      if (missingCategoryChannelColumn(error)) ({ error } = await supabase.from("categories").upsert(withoutCategoryChannelColumns(categoryRows), { onConflict: "external_id" }));
-      if (error) throw error;
-    }
-    const { data: existingCategories, error: existingCategoriesError } = await supabase.from("categories").select("id,external_id");
-    if (existingCategoriesError) throw existingCategoriesError;
-    const externalIds = categoryRows.map(c => c.external_id); const categoryExternalIdSet = new Set(externalIds);
-    const staleCategoryIds = (existingCategories || []).filter(c => c.external_id && !categoryExternalIdSet.has(c.external_id)).map(c => c.id);
-    if (staleCategoryIds.length) { const { error } = await supabase.from("categories").update({ is_active: false }).in("id", staleCategoryIds); if (error) throw error; }
-    const categoryMap = new Map();
-    if (externalIds.length) { const { data: dbCategories, error } = await supabase.from("categories").select("id,external_id").in("external_id", externalIds); if (error) throw error; for (const c of dbCategories || []) categoryMap.set(c.external_id, c.id); }
-    const productRows = products.map((p, index) => { const categoryName = String(p.category || "Без категории").trim() || "Без категории"; return { external_id: String(p.externalId || ""), name: String(p.name || "").trim(), description: p.description ? String(p.description) : null, price: Number(p.price || 0), category_id: categoryMap.get(`category:${categoryName}`) || null, sort_order: Number.isFinite(Number(p.sortOrder)) ? Number(p.sortOrder) : index, is_active: p.isActive !== false, available_online: p.availableOnline !== false, visible_in_menu: p.visibleInOnlineMenu !== false, image_url: p.imageUrl ? String(p.imageUrl) : null }; }).filter(p => p.external_id && p.name);
-    if (productRows.length) {
-      let { error } = await supabase.from("products").upsert(productRows, { onConflict: "external_id" });
-      if (missingOnlineMenuColumn(error)) ({ error } = await supabase.from("products").upsert(withoutOnlineMenuColumn(productRows), { onConflict: "external_id" }));
-      if (error) throw error;
-    }
-    const { data: existingProducts, error: existingProductsError } = await supabase.from("products").select("id,external_id");
-    if (existingProductsError) throw existingProductsError;
-    const productExternalIdSet = new Set(productRows.map(p => p.external_id));
-    const staleProductIds = (existingProducts || []).filter(p => p.external_id && !productExternalIdSet.has(p.external_id)).map(p => p.id);
-    if (staleProductIds.length) { const { error } = await supabase.from("products").update({ is_active: false, available_online: false }).in("id", staleProductIds); if (error) throw error; }
-    const revision=advanceCatalogRevision();
-    return res.json({ ok: true, deviceId: device?.id || null, categories: categoryRows.length, products: productRows.length, syncedAt: new Date().toISOString(),catalogRevision:revision });
-  } catch (error) { console.error("POST /api/menu/sync:", error); return res.status(500).json({ error: "Failed to sync menu" }); }
+
+    const result = await withTransaction(async client => {
+      const syncedAt = new Date().toISOString();
+      const { rows: deviceRows } = await client.query(
+        `INSERT INTO public.devices (device_key, name, is_active, last_sync_at)
+         VALUES ($1, $2, TRUE, $3::timestamptz)
+         ON CONFLICT (device_key) DO UPDATE SET
+           name = EXCLUDED.name,
+           is_active = TRUE,
+           last_sync_at = EXCLUDED.last_sync_at
+         RETURNING id`,
+        [deviceKey, deviceName || "Прилавок iPad", syncedAt]
+      );
+      const device = deviceRows[0];
+
+      const categoryRows = categories
+        .map((c, index) => ({
+          external_id: String(c.externalId || `category:${String(c.name || "").trim()}`),
+          name: String(c.name || "").trim(),
+          color: c.color ? String(c.color) : null,
+          sort_order: Number.isFinite(Number(c.sortOrder)) ? Number(c.sortOrder) : index,
+          is_active: c.isActive !== false,
+          available_online: c.availableOnline !== false,
+          visible_in_menu: c.visibleInOnlineMenu !== false
+        }))
+        .filter(c => c.name && c.external_id);
+
+      for (const category of categoryRows) {
+        await client.query(
+          `INSERT INTO public.categories
+             (external_id, name, color, sort_order, is_active, available_online, visible_in_menu, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+           ON CONFLICT (external_id) DO UPDATE SET
+             name = EXCLUDED.name,
+             color = EXCLUDED.color,
+             sort_order = EXCLUDED.sort_order,
+             is_active = EXCLUDED.is_active,
+             available_online = EXCLUDED.available_online,
+             visible_in_menu = EXCLUDED.visible_in_menu,
+             updated_at = now()`,
+          [category.external_id, category.name, category.color, category.sort_order, category.is_active, category.available_online, category.visible_in_menu]
+        );
+      }
+
+      const externalIds = categoryRows.map(c => c.external_id);
+      await client.query(
+        `UPDATE public.categories
+         SET is_active = FALSE, updated_at = now()
+         WHERE external_id IS NOT NULL
+           AND NOT (external_id = ANY($1::text[]))`,
+        [externalIds]
+      );
+
+      const categoryMap = new Map();
+      if (externalIds.length) {
+        const { rows: dbCategories } = await client.query(
+          `SELECT id, external_id
+           FROM public.categories
+           WHERE external_id = ANY($1::text[])`,
+          [externalIds]
+        );
+        for (const category of dbCategories) categoryMap.set(category.external_id, category.id);
+      }
+
+      const productRows = products
+        .map((p, index) => {
+          const categoryName = String(p.category || "Без категории").trim() || "Без категории";
+          return {
+            external_id: String(p.externalId || ""),
+            name: String(p.name || "").trim(),
+            description: p.description ? String(p.description) : null,
+            price: Number(p.price || 0),
+            category_id: categoryMap.get(`category:${categoryName}`) || null,
+            sort_order: Number.isFinite(Number(p.sortOrder)) ? Number(p.sortOrder) : index,
+            is_active: p.isActive !== false,
+            available_online: p.availableOnline !== false,
+            visible_in_menu: p.visibleInOnlineMenu !== false,
+            image_url: p.imageUrl ? String(p.imageUrl) : null
+          };
+        })
+        .filter(p => p.external_id && p.name);
+
+      for (const product of productRows) {
+        await client.query(
+          `INSERT INTO public.products
+             (external_id, name, description, price, category_id, sort_order, is_active, available_online, visible_in_menu, image_url, updated_at)
+           VALUES ($1, $2, $3, $4, $5::uuid, $6, $7, $8, $9, $10, now())
+           ON CONFLICT (external_id) DO UPDATE SET
+             name = EXCLUDED.name,
+             description = EXCLUDED.description,
+             price = EXCLUDED.price,
+             category_id = EXCLUDED.category_id,
+             sort_order = EXCLUDED.sort_order,
+             is_active = EXCLUDED.is_active,
+             available_online = EXCLUDED.available_online,
+             visible_in_menu = EXCLUDED.visible_in_menu,
+             image_url = EXCLUDED.image_url,
+             updated_at = now()`,
+          [product.external_id, product.name, product.description, product.price, product.category_id, product.sort_order, product.is_active, product.available_online, product.visible_in_menu, product.image_url]
+        );
+      }
+
+      const productExternalIds = productRows.map(p => p.external_id);
+      await client.query(
+        `UPDATE public.products
+         SET is_active = FALSE, available_online = FALSE, updated_at = now()
+         WHERE external_id IS NOT NULL
+           AND NOT (external_id = ANY($1::text[]))`,
+        [productExternalIds]
+      );
+
+      return { device, categoryCount: categoryRows.length, productCount: productRows.length, syncedAt };
+    });
+
+    const revision = advanceCatalogRevision();
+    return res.json({
+      ok: true,
+      deviceId: result.device?.id || null,
+      categories: result.categoryCount,
+      products: result.productCount,
+      syncedAt: result.syncedAt,
+      catalogRevision: revision
+    });
+  } catch (error) {
+    console.error("POST /api/menu/sync:", error);
+    return res.status(500).json({ error: "Failed to sync menu" });
+  }
 });
 
 app.post("/api/availability/snapshot",async(req,res)=>{
