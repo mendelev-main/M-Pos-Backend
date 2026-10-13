@@ -544,8 +544,15 @@ app.get("/api/orders/events", async (req, res) => {
     if(siteSleepingNow()){res.setHeader("Content-Type","text/event-stream; charset=utf-8");res.setHeader("Cache-Control","no-store");res.write(`retry: ${Math.ceil(millisecondsUntilSiteWake())}\nevent: sleeping\ndata: {}\n\n`);return res.end()}
     const deviceKey = String(req.header("x-device-key") || req.query.deviceKey || "").trim();
     if(!deviceKey) return res.status(401).json({error:"Missing device key"});
-    const { data: device, error } = await supabase.from("devices").select("id").eq("device_key", deviceKey).eq("is_active", true).maybeSingle();
-    if(error) throw error;
+    const { rows: deviceRows } = await query(
+      `SELECT id
+       FROM public.devices
+       WHERE device_key=$1
+         AND is_active=TRUE
+       LIMIT 1`,
+      [deviceKey]
+    );
+    const device=deviceRows?.[0];
     if(!device) return res.status(401).json({error:"Invalid device key"});
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8"); res.setHeader("Cache-Control", "no-cache, no-transform"); res.setHeader("Connection", "keep-alive"); res.setHeader("X-Accel-Buffering", "no"); res.flushHeaders?.();
     const client={res,deviceKey,deviceId:device.id}; eventClients.add(client); res.write(`event: ready\ndata: ${JSON.stringify({ok:true})}\n\n`); const heartbeat=setInterval(()=>{ try{res.write(`: ping\n\n`);}catch(e){} }, 15000); req.on("close",()=>{clearInterval(heartbeat);eventClients.delete(client);}); pushNewOrders();
@@ -555,8 +562,17 @@ app.get("/api/orders/events", async (req, res) => {
 async function requireDevice(req,res){
   const deviceKey=String(req.header("x-device-key")||req.body?.deviceKey||"").trim();
   if(!deviceKey){res.status(401).json({error:"Missing device key"});return null}
-  const {data,error}=await supabase.from("devices").select("id").eq("device_key",deviceKey).eq("is_active",true).maybeSingle();
-  if(error)throw error;if(!data){res.status(401).json({error:"Invalid device key"});return null}return data;
+  const {rows}=await query(
+    `SELECT id
+     FROM public.devices
+     WHERE device_key=$1
+       AND is_active=TRUE
+     LIMIT 1`,
+    [deviceKey]
+  );
+  const device=rows?.[0];
+  if(!device){res.status(401).json({error:"Invalid device key"});return null}
+  return device;
 }
 async function saveDeviceTelegramSettings(req, res) {
   try {
