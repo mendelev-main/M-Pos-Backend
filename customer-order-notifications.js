@@ -13,12 +13,18 @@ export async function deliverCreatedOrder({botToken,chatId,externalId,fetchImpl=
   } catch {return {state:'uncertain'};}
 }
 
-export function createCustomerOrderNotificationWorker({supabase,botToken,isSleeping=()=>false,fetchImpl=fetch,logger=console}) {
+export function createCustomerOrderNotificationWorker({query,botToken,isSleeping=()=>false,fetchImpl=fetch,logger=console}) {
   let busy=false;
-  async function rpc(name,args) {
-    const response=await supabase.rpc(name,args).abortSignal(AbortSignal.timeout(10_000));
-    if(response.error)throw Error('notification_database_error');
-    return response.data;
+  async function claim() {
+    const {rows}=await query('SELECT * FROM public.claim_customer_order_notification()');
+    return rows||[];
+  }
+  async function finish(job,outcome) {
+    const {rows}=await query(
+      'SELECT public.finish_customer_order_notification($1::uuid,$2::uuid,$3,$4::bigint,$5::integer) AS saved',
+      [job.order_id,job.claim_token,outcome.state,outcome.messageId??null,outcome.retrySeconds??30]
+    );
+    return rows?.[0]?.saved===true;
   }
   return async function poll() {
     if(busy||!botToken||isSleeping())return;
@@ -26,10 +32,10 @@ export function createCustomerOrderNotificationWorker({supabase,botToken,isSleep
     try {
       // Claim one at a time so waiting rows cannot lose their lease during a slow batch.
       for(let i=0;i<10;i++) {
-        const rows=await rpc('claim_customer_order_notification',{}),job=rows?.[0];
+        const rows=await claim(),job=rows?.[0];
         if(!job)break;
         const outcome=await deliverCreatedOrder({botToken,chatId:job.chat_id,externalId:job.external_id,fetchImpl});
-        const saved=await rpc('finish_customer_order_notification',{p_order_id:job.order_id,p_token:job.claim_token,p_state:outcome.state,p_message_id:outcome.messageId??null,p_retry_seconds:outcome.retrySeconds??30});
+        const saved=await finish(job,outcome);
         if(saved!==true)throw Error('notification_state_not_saved');
         if(outcome.state!=='sent')logger.warn('Customer order notification outcome',{state:outcome.state});
       }

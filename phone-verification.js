@@ -1,89 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
-
-export function normalizeTelegramUsername(value) {
-  if (typeof value !== "string") return null;
-  const name=value.trim().replace(/^@/, "");
-  return /^[A-Za-z][A-Za-z0-9_]{3,31}$/.test(name) ? name : null;
-}
-
-export const PHONE_VERIFICATION_TTL_MS = 5 * 60 * 1000;
-const TELEGRAM_BOT_USERNAME = "project_account_bot";
-
-export function createPhoneVerificationService(supabase, normalizePhone) {
-  const hashToken = token => createHash("sha256").update(String(token)).digest("hex");
-  const nowIso = () => new Date().toISOString();
-
-  async function create(phone, returnUrl = null) {
-    const normalized = normalizePhone(phone);
-    if (!normalized) return { error: "Некорректный номер телефона", status: 400 };
-
-    const token = randomBytes(32).toString("base64url");
-    const tokenHash = hashToken(token);
-    const expiresAt = new Date(Date.now() + PHONE_VERIFICATION_TTL_MS).toISOString();
-
-    const { error } = await supabase.from("phone_verifications").insert({
-      token_hash: tokenHash,
-      phone: normalized,
-      status: "PENDING",
-      expires_at: expiresAt,
-      return_url: returnUrl || null,
-    });
-    if (error) throw error;
-
-    return {
-      token,
-      status: "PENDING",
-      expiresAt,
-      telegramUrl: `https://t.me/${TELEGRAM_BOT_USERNAME}?start=${encodeURIComponent(token)}`,
-    };
-  }
-
-  async function get(token) {
-    const tokenHash = hashToken(token);
-    const { data, error } = await supabase.from("phone_verifications")
-      .select("id,phone,status,expires_at,verified_at,return_url,telegram_user_id")
-      .eq("token_hash", tokenHash).maybeSingle();
-    if (error) throw error;
-    if (!data) return null;
-
-    if (data.status === "PENDING" && new Date(data.expires_at).getTime() <= Date.now()) {
-      await supabase.from("phone_verifications").update({ status: "EXPIRED" }).eq("id", data.id).eq("status", "PENDING");
-      data.status = "EXPIRED";
-    }
-    return data;
-  }
-
-  async function confirm(token, phone, telegramUserId, telegramUsername) {
-    const normalized = normalizePhone(phone);
-    if (!normalized || !telegramUserId) return { ok: false, reason: "INVALID" };
-
-    const verification = await get(token);
-    if (!verification || verification.status !== "PENDING") return { ok: false, reason: verification?.status || "NOT_FOUND" };
-    if (verification.phone !== normalized) return { ok: false, reason: "PHONE_MISMATCH" };
-
-    const verifiedAt = nowIso();
-    const { data, error } = await supabase.from("phone_verifications")
-      .update({ status: "VERIFIED", verified_at: verifiedAt, telegram_user_id: String(telegramUserId), ...(telegramUsername !== undefined ? { telegram_username: normalizeTelegramUsername(telegramUsername), telegram_username_observed: true } : {}) })
-      .eq("id", verification.id).eq("status", "PENDING")
-      .select("id,status,verified_at,return_url,telegram_user_id").maybeSingle();
-    if (error) throw error;
-    if (!data) return { ok: false, reason: "ALREADY_USED" };
-
-    return { ok: true, status: "VERIFIED", verifiedAt: data.verified_at, returnUrl: data.return_url || null, telegramUserId: data.telegram_user_id || null };
-  }
-
-  async function consume(token, phone) {
-    const normalized = normalizePhone(phone);
-    const verification = await get(token);
-    if (!verification || verification.status !== "VERIFIED" || verification.phone !== normalized) return false;
-
-    const { data, error } = await supabase.from("phone_verifications")
-      .update({ status: "CONSUMED", consumed_at: nowIso() })
-      .eq("id", verification.id).eq("status", "VERIFIED")
-      .select("id").maybeSingle();
-    if (error) throw error;
-    return Boolean(data);
-  }
-
-  return { create, get, confirm, consume };
+export function normalizeTelegramUsername(value){if(typeof value!=="string")return null;const name=value.trim().replace(/^@/,"");return /^[A-Za-z][A-Za-z0-9_]{3,31}$/.test(name)?name:null;}
+export const PHONE_VERIFICATION_TTL_MS=5*60*1000;
+const TELEGRAM_BOT_USERNAME="project_account_bot";
+export function createPhoneVerificationService(query,normalizePhone){
+ const hashToken=token=>createHash("sha256").update(String(token)).digest("hex");
+ async function create(phone,returnUrl=null){const normalized=normalizePhone(phone);if(!normalized)return {error:"Некорректный номер телефона",status:400};const token=randomBytes(32).toString("base64url"),tokenHash=hashToken(token),expiresAt=new Date(Date.now()+PHONE_VERIFICATION_TTL_MS).toISOString();await query(`INSERT INTO public.phone_verifications (token_hash,phone,status,expires_at,return_url) VALUES ($1,$2,'PENDING',$3::timestamptz,$4)`,[tokenHash,normalized,expiresAt,returnUrl||null]);return {token,status:"PENDING",expiresAt,telegramUrl:`https://t.me/${TELEGRAM_BOT_USERNAME}?start=${encodeURIComponent(token)}`};}
+ async function get(token){const {rows}=await query(`SELECT id,phone,status,expires_at,verified_at,return_url,telegram_user_id FROM public.phone_verifications WHERE token_hash=$1 LIMIT 1`,[hashToken(token)]);const data=rows?.[0];if(!data)return null;if(data.status==="PENDING"&&new Date(data.expires_at).getTime()<=Date.now()){await query(`UPDATE public.phone_verifications SET status='EXPIRED' WHERE id=$1::uuid AND status='PENDING'`,[data.id]);data.status="EXPIRED";}return data;}
+ async function confirm(token,phone,telegramUserId,telegramUsername){const normalized=normalizePhone(phone);if(!normalized||!telegramUserId)return {ok:false,reason:"INVALID"};const verification=await get(token);if(!verification||verification.status!=="PENDING")return {ok:false,reason:verification?.status||"NOT_FOUND"};if(verification.phone!==normalized)return {ok:false,reason:"PHONE_MISMATCH"};const usernameObserved=telegramUsername!==undefined,username=usernameObserved?normalizeTelegramUsername(telegramUsername):null;const {rows}=await query(`UPDATE public.phone_verifications SET status='VERIFIED',verified_at=now(),telegram_user_id=$2,telegram_username=CASE WHEN $3::boolean THEN $4 ELSE telegram_username END,telegram_username_observed=CASE WHEN $3::boolean THEN TRUE ELSE telegram_username_observed END WHERE id=$1::uuid AND status='PENDING' RETURNING id,status,verified_at,return_url,telegram_user_id`,[verification.id,String(telegramUserId),usernameObserved,username]);const data=rows?.[0];if(!data)return {ok:false,reason:"ALREADY_USED"};return {ok:true,status:"VERIFIED",verifiedAt:data.verified_at,returnUrl:data.return_url||null,telegramUserId:data.telegram_user_id||null};}
+ async function consume(token,phone){const normalized=normalizePhone(phone),verification=await get(token);if(!verification||verification.status!=="VERIFIED"||verification.phone!==normalized)return false;const {rowCount}=await query(`UPDATE public.phone_verifications SET status='CONSUMED',consumed_at=now() WHERE id=$1::uuid AND status='VERIFIED'`,[verification.id]);return rowCount===1;}
+ return {create,get,confirm,consume};
 }
