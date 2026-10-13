@@ -9,10 +9,17 @@ test('Telegram usernames normalize without accepting URLs or injected handles',(
 });
 test('verified phone stores observed username and distinguishes old bot from username removal',async()=>{
  for(const username of ['valid_user',null,undefined]){
-  let patch;const initial={id:'verification',phone:'synthetic',status:'PENDING'};
-  const builder={select(){return this},eq(){return this},update(value){patch=value;return this},async maybeSingle(){return {data:patch?{...initial,...patch}:initial,error:null}}};
-  const api=createPhoneVerificationService({from:()=>builder},x=>x);assert.equal((await api.confirm('synthetic-token','synthetic',123,username)).ok,true);
-  if(username===undefined)assert.equal(Object.hasOwn(patch,'telegram_username_observed'),false);else {assert.equal(patch.telegram_username_observed,true);assert.equal(patch.telegram_username,username);}
+  let observed,storedUsername;
+  const initial={id:'verification',phone:'synthetic',status:'PENDING',expires_at:new Date(Date.now()+300000)};
+  const query=async(sql,args)=>{
+    if(sql.startsWith('SELECT'))return {rows:[initial]};
+    assert.match(sql,/telegram_username=CASE WHEN \$3::boolean THEN \$4/);
+    assert.match(sql,/telegram_username_observed=CASE WHEN \$3::boolean THEN TRUE/);
+    [, , observed,storedUsername]=args;
+    return {rows:[{...initial,status:'VERIFIED'}]};
+  };
+  const api=createPhoneVerificationService(query,x=>x);assert.equal((await api.confirm('synthetic-token','synthetic',123,username)).ok,true);
+  assert.equal(observed,username!==undefined);assert.equal(storedUsername,username??null);
  }
 });
 test('customer trigger synchronizes observed handle, clears removal and preserves legacy updates',async()=>{

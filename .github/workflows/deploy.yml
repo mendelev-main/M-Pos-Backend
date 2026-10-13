@@ -10,8 +10,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate before deployment
+    uses: ./.github/workflows/test.yml
+
   deploy:
     name: Deploy production
+    needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:

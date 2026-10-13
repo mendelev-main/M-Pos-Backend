@@ -16,15 +16,15 @@ test('only confirmed Telegram success is sent; ambiguous errors never retry',asy
 test('polls do not overlap and release the guard after completion',async()=>{
  let release,claims=0,finishes=0;
  const gate=new Promise(resolve=>release=resolve);
- const supabase={rpc(name){return {abortSignal:async()=>name.startsWith('claim')?{data:++claims===1?[job]:[],error:null}:{data:(finishes++,true),error:null}}}};
- const poll=createCustomerOrderNotificationWorker({supabase,botToken:'synthetic',logger:quiet,fetchImpl:async()=>{await gate;return reply(true,{ok:true,result:{message_id:1}})}});
+ const query=async(sql)=>sql.includes('claim_customer')?{rows:++claims===1?[job]:[]}:{rows:[{saved:(finishes++,true)}]};
+ const poll=createCustomerOrderNotificationWorker({query,botToken:'synthetic',logger:quiet,fetchImpl:async()=>{await gate;return reply(true,{ok:true,result:{message_id:1}})}});
  const first=poll();await Promise.resolve();await Promise.resolve();await poll();assert.equal(claims,1);release();await first;assert.equal(finishes,1);await poll();assert.equal(claims,3);
 });
 test('database failures are fail closed; acknowledgement failure does not resend',async()=>{
  let sends=0,claimed=false;
- const supabase={rpc(name){return {abortSignal:async()=>name.startsWith('claim')?{data:claimed?[]:(claimed=true,[job]),error:null}:{error:{message:'synthetic failure'}}}}};
- for(let i=0;i<2;i++)await createCustomerOrderNotificationWorker({supabase,botToken:'synthetic',logger:quiet,fetchImpl:async()=>{sends++;return reply(true,{ok:true,result:{message_id:1}})}})();
+ const query=async(sql)=>{if(sql.includes('claim_customer'))return {rows:claimed?[]:(claimed=true,[job])};throw Error('synthetic failure');};
+ for(let i=0;i<2;i++)await createCustomerOrderNotificationWorker({query,botToken:'synthetic',logger:quiet,fetchImpl:async()=>{sends++;return reply(true,{ok:true,result:{message_id:1}})}})();
  assert.equal(sends,1);
  let accesses=0;
- await createCustomerOrderNotificationWorker({supabase:{rpc(){accesses++;throw Error('must skip')}},botToken:'',logger:quiet})();assert.equal(accesses,0);
+ await createCustomerOrderNotificationWorker({query:async()=>{accesses++;throw Error('must skip')},botToken:'',logger:quiet})();assert.equal(accesses,0);
 });

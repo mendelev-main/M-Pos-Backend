@@ -310,7 +310,7 @@ Validation:
 - bot -> public backend health and shared-secret authorization passed;
 - local native-baseline PGlite integration and PostgreSQL-adapted checkout unit tests passed (3 tests).
 
-The full historical test suite still contains Supabase mocks and source-pattern assertions and does not pass against the migrated runtime. The targeted native tests do not replace physical POS/Telegram end-to-end acceptance.
+The historical test suite was adapted to native PostgreSQL and 24/7 ordering on 2026-10-14. All 120 tests pass under Node 22. Native baseline coverage includes persisted device Telegram settings. Deployment now runs the reusable test workflow before rebuilding production. Physical POS/Telegram end-to-end acceptance is still a separate operator check.
 
 ## Remaining operator acceptance
 

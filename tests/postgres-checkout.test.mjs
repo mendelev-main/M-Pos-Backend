@@ -5,6 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { createPhoneVerificationService } from '../phone-verification.js';
 import { createCheckoutService } from '../checkout-service.js';
+import { createTelegramOrderAlerts } from '../telegram-order-alerts.js';
 import '../public/order-validation.js';
 
 test('native baseline supports confirmation and atomic checkout under mpos_app', async () => {
@@ -20,6 +21,14 @@ test('native baseline supports confirmation and atomic checkout under mpos_app',
     await db.exec('SET ROLE mpos_app;');
     const query = (sql, params) => db.query(sql, params);
     const device = (await query("INSERT INTO public.devices(device_key,name) VALUES ('integration-device','Test') RETURNING id")).rows[0].id;
+    const alerts = createTelegramOrderAlerts({ query, botToken: '' });
+    await alerts.configure(device, { chatId: '900000001', enabled: true });
+    await alerts.configure(device, { chatId: '900000002', ownerChatId: '700000001', enabled: true });
+    let settings = (await query('SELECT telegram_order_chat_id,telegram_owner_chat_id,notify_online_orders FROM public.devices WHERE id=$1', [device])).rows[0];
+    assert.deepEqual(settings, { telegram_order_chat_id: '900000002', telegram_owner_chat_id: '700000001', notify_online_orders: true });
+    await alerts.configure(device, { chatId: '', enabled: false });
+    settings = (await query('SELECT telegram_order_chat_id,telegram_owner_chat_id,notify_online_orders FROM public.devices WHERE id=$1', [device])).rows[0];
+    assert.deepEqual(settings, { telegram_order_chat_id: null, telegram_owner_chat_id: '700000001', notify_online_orders: false });
     const product = (await query("INSERT INTO public.products(external_id,name,price,available_online) VALUES ('integration-product','Test',12.34,true) RETURNING id")).rows[0].id;
     await query('SELECT public.store_availability_snapshot($1,1,now(),$2::jsonb,ARRAY[]::text[])', [device, JSON.stringify([{ externalId: 'integration-product', quantity: 7 }])]);
     const { normalizePhone, validate: validateOrderContact } = globalThis.OrderValidation;

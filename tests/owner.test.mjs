@@ -63,8 +63,12 @@ import {mountOwnerRoutes} from '../owner-auth.js';
 function routeFixture(){
  const f=fixture(),routes=new Map(),sent=[];
  f.config.botToken='test-token';f.config.reportChatId='fixed-group';
- const db={from:table=>{const conditions={};return{select(){return this;},eq(k,v){conditions[k]=v;return this;},async maybeSingle(){return{data:conditions.id==='device'&&conditions.device_key==='device-key-123456789'&&conditions.is_active===true?{id:'device'}:null};},async single(){return{data:await f.store.read()};}};},rpc:async(name,input)=>({data:await f.store.cas(input.expected_revision,input.next_document)})};
- mountOwnerRoutes({post:(path,handler)=>routes.set(path,handler)},{db,config:f.config,fetchImpl:async(url,options)=>{sent.push({url,options});return{ok:true,json:async()=>({ok:true})};}});
+ const query=async(sql,args)=>{
+   if(sql.includes('FROM public.devices'))return {rows:args[0]==='device'&&args[1]==='device-key-123456789'?[{id:'device'}]:[]};
+   if(sql.startsWith('SELECT revision'))return {rows:[await f.store.read()]};
+   assert.match(sql,/UPDATE public.owner_auth_state/);return {rowCount:await f.store.cas(args[0],JSON.parse(args[1]))?1:0};
+ };
+ mountOwnerRoutes({post:(path,handler)=>routes.set(path,handler)},{query,config:f.config,fetchImpl:async(url,options)=>{sent.push({url,options});return{ok:true,json:async()=>({ok:true})};}});
  async function post(path,body={},headers={}){let status=200,result;const response={setHeader(){},status(s){status=s;return this;},json(d){result=d;}};await routes.get('/api/owner/'+path)({body,header:name=>headers[name]},response);return{status,result};}
  return{...f,post,sent};
 }

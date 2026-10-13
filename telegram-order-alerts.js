@@ -19,14 +19,14 @@ export function createTelegramOrderAlerts({ query, botToken, fetchImpl = fetch }
     ];
     const params = [storedChatId, Boolean(enabled)];
     if (normalizedOwnerChatId !== undefined) {
-      fields.push(`telegram_owner_chat_id = ${params.length + 1}`);
+      fields.push(`telegram_owner_chat_id = $${params.length + 1}`);
       params.push(normalizedOwnerChatId || null);
     }
     params.push(deviceId);
     await query(
       `UPDATE public.devices
        SET ${fields.join(", ")}
-       WHERE id = ${params.length}::uuid`,
+       WHERE id = $${params.length}::uuid`,
       params
     );
     return { ok: true, enabled: Boolean(enabled), chatId: storedChatId || "", ownerChatId: normalizedOwnerChatId || "" };
