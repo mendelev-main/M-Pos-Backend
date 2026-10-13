@@ -11,8 +11,12 @@ concurrency:
 
 jobs:
   deploy:
+    name: Deploy production
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment:
+      name: production
+      url: https://project-dubrovno.store
 
     steps:
       - name: Configure SSH
@@ -23,10 +27,8 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-
           ssh-keyscan -p "$VDS_PORT" -H "$VDS_HOST" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
@@ -36,9 +38,39 @@ jobs:
           VDS_PORT: ${{ secrets.VDS_PORT }}
           VDS_USER: ${{ secrets.VDS_USER }}
         run: |
-          ssh \
-            -i ~/.ssh/id_ed25519 \
-            -p "$VDS_PORT" \
-            -o IdentitiesOnly=yes \
-            "$VDS_USER@$VDS_HOST" \
+          ssh -i ~/.ssh/id_ed25519 -p "$VDS_PORT" -o IdentitiesOnly=yes "$VDS_USER@$VDS_HOST" \
             'sudo -n /opt/mpos/scripts/deploy-backend.sh'
+
+      - name: Verify deployed commit and container
+        env:
+          VDS_HOST: ${{ secrets.VDS_HOST }}
+          VDS_PORT: ${{ secrets.VDS_PORT }}
+          VDS_USER: ${{ secrets.VDS_USER }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -p "$VDS_PORT" -o IdentitiesOnly=yes "$VDS_USER@$VDS_HOST" \
+            "EXPECTED_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          ACTUAL_SHA="$(git -C /opt/mpos/app rev-parse HEAD)"
+          echo "Expected commit: $EXPECTED_SHA"
+          echo "Deployed commit: $ACTUAL_SHA"
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA"
+
+          STATUS="$(sudo -n /opt/mpos/scripts/deploy-backend.sh >/dev/null 2>&1; docker inspect -f '{{.State.Status}}' mpos-backend 2>/dev/null || true)"
+          test "$STATUS" = "running"
+          echo "Backend container: running"
+          REMOTE
+
+      - name: Verify production health
+        run: |
+          for attempt in {1..10}; do
+            if curl --fail --silent --show-error https://project-dubrovno.store/health; then
+              echo
+              echo "Production health: OK"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Production health check failed"
+          exit 1
