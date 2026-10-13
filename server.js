@@ -739,7 +739,7 @@ app.post("/api/customers/:id/loyalty-adjustment",async(req,res)=>{
   }catch(e){console.error("loyalty adjustment",e);res.status(500).json({error:"Failed to adjust loyalty"})}
 });
 
-app.get("/api/config", (_req, res) => res.json({ deliveryFee: Number.isFinite(deliveryFee) ? deliveryFee : 0,orderingOpen:orderingOpenNow(),orderHours:{opensAt:"10:00",closesAt:"22:30",timeZone:VENUE_TIME_ZONE} }));
+app.get("/api/config", (_req, res) => res.json({ deliveryFee: Number.isFinite(deliveryFee) ? deliveryFee : 0,orderingOpen:orderingOpenNow(),orderHours:null }));
 
 app.post("/api/orders", async (req, res) => {
   try {

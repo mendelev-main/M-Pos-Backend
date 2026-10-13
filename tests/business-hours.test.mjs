@@ -5,18 +5,11 @@ import { closedPageHtml, isOrderingOpen, isSiteSleepWindow, millisecondsUntilSit
 const zone="Europe/Minsk";
 const at=iso=>new Date(iso);
 
-test("guest site sleeps from midnight until 06:00 venue time",()=>{
-  assert.equal(venueMinute(at("2026-10-02T21:00:00Z"),zone),0);
-  assert.equal(isSiteSleepWindow(at("2026-10-03T02:59:00Z"),zone),true);
-  assert.equal(isSiteSleepWindow(at("2026-10-03T03:00:00Z"),zone),false);
-  assert.equal(millisecondsUntilSiteWake(at("2026-10-02T21:30:00Z"),zone),5.5*60*60*1000);
-});
-
-test("online ordering is accepted only from 10:00 until 22:30 venue time",()=>{
-  assert.equal(isOrderingOpen(at("2026-10-03T06:59:00Z"),zone),false);
-  assert.equal(isOrderingOpen(at("2026-10-03T07:00:00Z"),zone),true);
-  assert.equal(isOrderingOpen(at("2026-10-03T19:29:59Z"),zone),true);
-  assert.equal(isOrderingOpen(at("2026-10-03T19:30:00Z"),zone),false);
+test("site and ordering remain available across the former closing boundaries",()=>{
+  for(const iso of ["2026-10-02T21:00:00Z","2026-10-03T02:59:00Z","2026-10-03T03:00:00Z","2026-10-03T06:59:00Z","2026-10-03T07:00:00Z","2026-10-03T19:29:59Z","2026-10-03T19:30:00Z"]){
+    assert.equal(isSiteSleepWindow(at(iso),zone),false);
+    assert.equal(isOrderingOpen(at(iso),zone),true);
+  }
 });
 
 test("overnight page shows the venue message and working hours",()=>{

@@ -316,7 +316,7 @@ The full historical test suite still contains Supabase mocks and source-pattern 
 
 Synchronize the real iPad/POS catalog and availability into the clean database, then check real images, a Telegram-confirmed order, POS order receipt and loyalty. Menu is intentionally empty until synchronization. Real Telegram contact sharing and physical POS operation were not performed by this agent.
 
-The regular venue opening hours are unchanged; checkout is unavailable after 22:30 Europe/Minsk.
+Since 2026-10-14, the site, menu, checkout, SSE and background workers are available around the clock. Scheduled nighttime closure is disabled.
 
 ## Rollback references
 

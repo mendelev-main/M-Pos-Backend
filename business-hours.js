@@ -9,8 +9,9 @@ export function venueMinute(date=new Date(),timeZone=VENUE_TIME_ZONE){
   return Number(values.hour)*60+Number(values.minute);
 }
 
-export function isSiteSleepWindow(date=new Date(),timeZone=VENUE_TIME_ZONE){return venueMinute(date,timeZone)<SITE_WAKE_MINUTE}
-export function isOrderingOpen(date=new Date(),timeZone=VENUE_TIME_ZONE){const minute=venueMinute(date,timeZone);return minute>=ORDER_OPEN_MINUTE&&minute<ORDER_CLOSE_MINUTE}
+// The VDS backend, menu, checkout and background workers are available 24/7.
+export function isSiteSleepWindow(){return false}
+export function isOrderingOpen(){return true}
 export function millisecondsUntilSiteWake(date=new Date(),timeZone=VENUE_TIME_ZONE){return Math.max(60_000,(SITE_WAKE_MINUTE-venueMinute(date,timeZone))*60_000)}
 
 export function closedPageHtml({ordering=false,date=new Date()}={}){
