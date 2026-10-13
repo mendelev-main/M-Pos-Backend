@@ -1,9 +1,9 @@
 import express from "express";
 import { createCustomerOrderNotificationWorker } from "./customer-order-notifications.js";
 import { sendLoyaltyTelegram } from "./loyalty-telegram.js";
-import { createClient } from "@supabase/supabase-js";
 import { readFile } from "node:fs/promises";
 import { closedPageHtml, isSiteSleepWindow, millisecondsUntilSiteWake } from "./business-hours.js";
+import { query, withTransaction } from "./db/index.js";
 
 let runningApp = null;
 const originalListen = express.application.listen;
@@ -16,11 +16,7 @@ await import("./server.js");
 express.application.listen = originalListen;
 if (!runningApp) throw new Error("Prilavok backend app was not initialized");
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
-if (!supabaseUrl || !supabaseKey) throw new Error("Missing Supabase configuration");
-const supabase = createClient(supabaseUrl, supabaseKey);
 
 function shortOrderNumber(externalId) {
   return String(externalId || "").slice(0, 8);
@@ -33,15 +29,8 @@ const orderStatusMessages = {
 };
 
 async function telegramRecipientForOrder(orderId) {
-  const { data, error } = await supabase.from("checkout_sessions")
-    .select("telegram_user_id")
-    .eq("order_id", orderId)
-    .not("telegram_user_id", "is", null)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  return data?.telegram_user_id ? String(data.telegram_user_id) : null;
+  const {rows}=await query(`SELECT telegram_user_id FROM public.checkout_sessions WHERE order_id=$1::uuid AND telegram_user_id IS NOT NULL ORDER BY updated_at DESC,id LIMIT 1`,[orderId]);
+  return rows?.[0]?.telegram_user_id?String(rows[0].telegram_user_id):null;
 }
 
 async function sendOrderTelegramStatus(orderId, status, externalId, estimateLabel="") {
@@ -145,32 +134,9 @@ const manualReadyEstimateLabels = new Map([
   ["5m", "5 минут"], ["15m", "15 минут"], ["30m", "30 минут"], ["40m", "40 минут"], ["60plus", "больше часа"],
 ]);
 
-runningApp.post("/api/orders/:id/ready", async (req, res) => {
-  try {
-    const deviceKey = String(req.header("x-device-key") || req.body?.deviceKey || "").trim();
-    const id = String(req.params.id || "").trim();
-    if (!deviceKey) return res.status(401).json({ error: "Missing device key" });
-    if (!id) return res.status(400).json({ error: "Invalid order id" });
-    const { data: device, error: deviceError } = await supabase.from("devices").select("id").eq("device_key", deviceKey).eq("is_active", true).maybeSingle();
-    if (deviceError) throw deviceError;
-    if (!device) return res.status(401).json({ error: "Invalid device key" });
-    const { data: existing, error: existingError } = await supabase.from("orders").select("id,status,updated_at,external_id").eq("id", id).maybeSingle();
-    if (existingError) throw existingError;
-    if (!existing) return res.status(404).json({ error: "Заказ не найден" });
-    if (existing.status === "ready") return res.json({ ok: true, order: existing, alreadyReady: true });
-    if (existing.status !== "accepted") return res.status(409).json({ error: "Сначала заказ должен быть взят в работу", order: existing });
-    const { data: order, error } = await supabase.from("orders").update({ status: "ready", updated_at: new Date().toISOString() }).eq("id", id).eq("status", "accepted").select("id,status,updated_at,external_id").maybeSingle();
-    if (error) throw error;
-    if (!order) return res.status(409).json({ error: "Статус заказа уже изменился" });
-    await sendOrderTelegramStatus(order.id, "ready", order.external_id);
-    return res.json({ ok: true, order });
-  } catch (error) {
-    console.error("POST /api/orders/:id/ready:", error);
-    return res.status(500).json({ error: "Не удалось отметить заказ готовым" });
-  }
-});
+runningApp.post("/api/orders/:id/ready",async(req,res)=>{try{const deviceKey=String(req.header("x-device-key")||req.body?.deviceKey||"").trim(),id=String(req.params.id||"").trim();if(!deviceKey)return res.status(401).json({error:"Missing device key"});if(!id)return res.status(400).json({error:"Invalid order id"});const {rows:deviceRows}=await query(`SELECT id FROM public.devices WHERE device_key=$1 AND is_active=TRUE LIMIT 1`,[deviceKey]);if(!deviceRows?.[0])return res.status(401).json({error:"Invalid device key"});const {rows:existingRows}=await query(`SELECT id,status,updated_at,external_id FROM public.orders WHERE id=$1::uuid LIMIT 1`,[id]);const existing=existingRows?.[0];if(!existing)return res.status(404).json({error:"Заказ не найден"});if(existing.status==="ready")return res.json({ok:true,order:existing,alreadyReady:true});if(existing.status!=="accepted")return res.status(409).json({error:"Сначала заказ должен быть взят в работу",order:existing});const {rows}=await query(`UPDATE public.orders SET status='ready',updated_at=now() WHERE id=$1::uuid AND status='accepted' RETURNING id,status,updated_at,external_id`,[id]);const order=rows?.[0];if(!order)return res.status(409).json({error:"Статус заказа уже изменился"});await sendOrderTelegramStatus(order.id,"ready",order.external_id);return res.json({ok:true,order});}catch(error){console.error("POST /api/orders/:id/ready:",error);return res.status(500).json({error:"Не удалось отметить заказ готовым"})}});
 
-const notifyCreatedOrders=createCustomerOrderNotificationWorker({supabase,botToken:telegramBotToken,isSleeping:isSiteSleepWindow});
+const notifyCreatedOrders=createCustomerOrderNotificationWorker({query,botToken:telegramBotToken,isSleeping:isSiteSleepWindow});
 setTimeout(notifyCreatedOrders,3000);
 setInterval(notifyCreatedOrders,3000);
 
@@ -179,19 +145,16 @@ setInterval(notifyCreatedOrders,3000);
 async function cleanupReadyOrders() {
   try {
     if(isSiteSleepWindow())return;
-    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { data: oldOrders, error: selectError } = await supabase.from("orders").select("id").eq("status", "ready").lt("updated_at", cutoff).limit(500);
-    if (selectError) throw selectError;
-    const ids = (oldOrders || []).map(order => order.id);
-    if (!ids.length) return;
-    const { error: itemsError } = await supabase.from("order_items").delete().in("order_id", ids);
-    if (itemsError) throw itemsError;
-    const { error: ordersError } = await supabase.from("orders").delete().in("id", ids).eq("status", "ready");
-    if (ordersError) throw ordersError;
-    console.log(`Daily cleanup removed ${ids.length} ready orders`);
-  } catch (error) {
-    console.error("Daily ready-order cleanup:", error);
-  }
+    const cutoff=new Date(Date.now()-24*60*60*1000).toISOString();
+    const removed=await withTransaction(async client=>{
+      const {rows}=await client.query(`SELECT id FROM public.orders WHERE status='ready' AND updated_at<$1::timestamptz ORDER BY updated_at LIMIT 500 FOR UPDATE`,[cutoff]);
+      const ids=rows.map(row=>row.id);if(!ids.length)return 0;
+      await client.query(`DELETE FROM public.order_items WHERE order_id=ANY($1::uuid[])`,[ids]);
+      await client.query(`DELETE FROM public.orders WHERE id=ANY($1::uuid[]) AND status='ready'`,[ids]);
+      return ids.length;
+    });
+    if(removed)console.log(`Daily cleanup removed ${removed} ready orders`);
+  } catch(error){console.error("Daily ready-order cleanup:",error);}
 }
 setTimeout(cleanupReadyOrders, 60 * 1000);
 setInterval(cleanupReadyOrders, 24 * 60 * 60 * 1000);
