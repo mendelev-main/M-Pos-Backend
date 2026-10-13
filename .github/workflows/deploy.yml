@@ -38,29 +38,31 @@ jobs:
           VDS_PORT: ${{ secrets.VDS_PORT }}
           VDS_USER: ${{ secrets.VDS_USER }}
         run: |
-          ssh -i ~/.ssh/id_ed25519 -p "$VDS_PORT" -o IdentitiesOnly=yes "$VDS_USER@$VDS_HOST" \
+          ssh \
+            -i ~/.ssh/id_ed25519 \
+            -p "$VDS_PORT" \
+            -o IdentitiesOnly=yes \
+            "$VDS_USER@$VDS_HOST" \
             'sudo -n /opt/mpos/scripts/deploy-backend.sh'
 
-      - name: Verify deployed commit and container
+      - name: Verify deployed commit
         env:
           VDS_HOST: ${{ secrets.VDS_HOST }}
           VDS_PORT: ${{ secrets.VDS_PORT }}
           VDS_USER: ${{ secrets.VDS_USER }}
           EXPECTED_SHA: ${{ github.sha }}
         run: |
-          ssh -i ~/.ssh/id_ed25519 -p "$VDS_PORT" -o IdentitiesOnly=yes "$VDS_USER@$VDS_HOST" \
-            "EXPECTED_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE'
-          set -euo pipefail
+          ACTUAL_SHA="$(ssh \
+            -i ~/.ssh/id_ed25519 \
+            -p "$VDS_PORT" \
+            -o IdentitiesOnly=yes \
+            "$VDS_USER@$VDS_HOST" \
+            'git -C /opt/mpos/app rev-parse HEAD')"
 
-          ACTUAL_SHA="$(git -C /opt/mpos/app rev-parse HEAD)"
           echo "Expected commit: $EXPECTED_SHA"
           echo "Deployed commit: $ACTUAL_SHA"
           test "$ACTUAL_SHA" = "$EXPECTED_SHA"
-
-          STATUS="$(sudo -n /opt/mpos/scripts/deploy-backend.sh >/dev/null 2>&1; docker inspect -f '{{.State.Status}}' mpos-backend 2>/dev/null || true)"
-          test "$STATUS" = "running"
-          echo "Backend container: running"
-          REMOTE
+          echo "Commit verification: OK"
 
       - name: Verify production health
         run: |
@@ -70,7 +72,23 @@ jobs:
               echo "Production health: OK"
               exit 0
             fi
+            echo "Health check attempt $attempt/10 failed"
             sleep 2
           done
+
           echo "Production health check failed"
           exit 1
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          {
+            echo "## Production deployment successful"
+            echo ""
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Environment: production"
+            echo "- VDS deploy: OK"
+            echo "- Commit verification: OK"
+            echo "- Production health: OK"
+            echo "- URL: https://project-dubrovno.store"
+          } >> "$GITHUB_STEP_SUMMARY"
