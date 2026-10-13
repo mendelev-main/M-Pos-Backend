@@ -11,6 +11,7 @@ import { validateLoyaltyAllocation } from "./loyalty-allocation.js";
 import { closedPageHtml, isOrderingOpen, isSiteSleepWindow, millisecondsUntilSiteWake, VENUE_TIME_ZONE } from "./business-hours.js";
 import { createTelegramOrderAlerts } from "./telegram-order-alerts.js";
 import { createLivePosReports } from "./live-pos-reports.js";
+import { query } from "./db/index.js";
 
 import "./public/order-validation.js";
 const { validate: validateOrderContact, normalizePhone } = globalThis.OrderValidation;
@@ -360,14 +361,24 @@ app.get("/api/menu/availability",async(_req,res)=>{
 app.get("/api/menu", async (req, res) => {
   try {
     const menuSurface = String(req.query?.surface || "").toLowerCase() === "menu";
-    const loadCategories = visibilityColumn => supabase.from("categories").select("id,name,color,sort_order,is_active,external_id").eq("is_active", true).eq(visibilityColumn, true).order("sort_order", { ascending: true }).order("name", { ascending: true });
-    let { data: categories, error: categoriesError } = await loadCategories(menuSurface ? "visible_in_menu" : "available_online");
-    if (missingCategoryChannelColumn(categoriesError)) ({ data: categories, error: categoriesError } = await supabase.from("categories").select("id,name,color,sort_order,is_active,external_id").eq("is_active", true).order("sort_order", { ascending: true }).order("name", { ascending: true }));
-    if (categoriesError) throw categoriesError;
-    const loadProducts = visibilityColumn => supabase.from("products").select("id,name,description,price,category_id,image_url,sort_order,is_active,available_online,external_id").eq("is_active", true).eq(visibilityColumn, true).order("sort_order", { ascending: true }).order("name", { ascending: true });
-    let { data: products, error: productsError } = await loadProducts(menuSurface ? "visible_in_menu" : "available_online");
-    if (menuSurface && missingOnlineMenuColumn(productsError)) ({ data: products, error: productsError } = await loadProducts("available_online"));
-    if (productsError) throw productsError;
+    const visibilityColumn = menuSurface ? "visible_in_menu" : "available_online";
+
+    const { rows: categories } = await query(`
+      SELECT id, name, color, sort_order, is_active, external_id
+      FROM categories
+      WHERE is_active = TRUE
+        AND ${visibilityColumn} = TRUE
+      ORDER BY sort_order ASC, name ASC
+    `);
+
+    const { rows: products } = await query(`
+      SELECT id, name, description, price, category_id, image_url,
+             sort_order, is_active, available_online, external_id
+      FROM products
+      WHERE is_active = TRUE
+        AND ${visibilityColumn} = TRUE
+      ORDER BY sort_order ASC, name ASC
+    `);
     const allowedCategoryIds = new Set((categories ?? []).map(c => c.id));
     const surfaceProducts = (products ?? []).filter(p => !p.category_id || allowedCategoryIds.has(p.category_id));
     const onlineCategoryIds = new Set(surfaceProducts.map(p => p.category_id).filter(Boolean));
