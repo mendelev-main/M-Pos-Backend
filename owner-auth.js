@@ -70,18 +70,25 @@ export function createOwnerService({store,config,now=Date.now}) {
     });}
   };
 }
-export function supabaseOwnerStore(db){return {
-  async read(){const {data,error}=await db.from('owner_auth_state').select('revision,document').eq('id',true).single();if(error)throw error;return data;},
-  async cas(revision,document){const {data,error}=await db.rpc('owner_auth_compare_swap',{expected_revision:revision,next_document:document});if(error)throw error;return data===true;}
+export function postgresOwnerStore(query){return {
+  async read(){
+    const {rows}=await query(`SELECT revision,document FROM public.owner_auth_state WHERE id=TRUE LIMIT 1`);
+    if(!rows?.[0])throw new Error('owner_auth_state_missing');
+    return rows[0];
+  },
+  async cas(revision,document){
+    const {rowCount}=await query(`UPDATE public.owner_auth_state SET revision=revision+1,document=$2::jsonb,updated_at=now() WHERE id=TRUE AND revision=$1`,[revision,JSON.stringify(document)]);
+    return rowCount===1;
+  }
 };}
-export function mountOwnerRoutes(app,{db,config=ownerConfiguration(),fetchImpl=fetch}){
-  const service=createOwnerService({store:supabaseOwnerStore(db),config});
+export function mountOwnerRoutes(app,{query,config=ownerConfiguration(),fetchImpl=fetch}){
+  const service=createOwnerService({store:postgresOwnerStore(query),config});
   const wrap=fn=>async(req,res)=>{res.setHeader('Cache-Control','no-store');try{res.json(await fn(req));}catch(e){res.status(e.status||503).json({error:e.status?e.message:'Сервис владельца временно недоступен'});}};
   async function device(req){
     if(!config.enabled||!config.deviceId)fail('Сервис владельца не настроен',503);
     const key=req.header('x-device-key');if(typeof key!=='string'||key.length<16||key.length>200)fail('Устройство не подтверждено',401);
-    const {data,error}=await db.from('devices').select('id').eq('id',config.deviceId).eq('device_key',key).eq('is_active',true).maybeSingle();
-    if(error)throw error;if(!data)fail('Устройство не подтверждено',403);
+    const {rows}=await query(`SELECT id FROM public.devices WHERE id=$1::uuid AND device_key=$2 AND is_active=TRUE LIMIT 1`,[config.deviceId,key]);
+    if(!rows?.[0])fail('Устройство не подтверждено',403);
   }
   for(const action of ['start','status','finish','cancel'])app.post(`/api/owner/${action}`,wrap(async req=>{await device(req);return service[action](req.body||{});}));
   app.post('/api/owner/bot',wrap(async req=>{
