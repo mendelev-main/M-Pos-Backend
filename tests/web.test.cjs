@@ -99,3 +99,14 @@ test('menu endpoint removes products whose category is hidden on the requested s
  assert.equal(c.orderingOpenNow(),true);
  c.applyOrderingState();assert.equal(reloaded,false);assert.equal(c.document.getElementById('submitBtn').disabled,false);
 });
+
+test('invalid checkout fields are highlighted without native validation bubbles or toast',async()=>{
+ const c=fixture();let posts=0,notices=0;c.toast=()=>notices++;c.fetch=async(url)=>{if(url.endsWith('/api/checkout'))posts++;return {ok:true,json:async()=>({categories:[],products:[],items:[]})}};
+ vm.runInContext('cart=[{id:"synthetic-product",qty:1}];orderType="Самовывоз";',c);
+ const name=c.document.getElementById('namePickup'),phone=c.document.getElementById('phonePickup'),comment=c.document.getElementById('commentPickup');name.id='namePickup';name.value='Иван Иванов';phone.value='291234567';comment.value='сучара';
+ name.reportValidity=()=>{throw Error('Native validation popup is forbidden')};
+ await c.submitOrder();assert.equal(posts,0);assert.equal(notices,0);assert.equal(name['aria-invalid'],'true');assert.equal(phone['aria-invalid'],'false');assert.equal(comment['aria-invalid'],'true');
+ name.value='Иван';c.validateCheckoutInput(name);assert.equal(name['aria-invalid'],'false');
+ vm.runInContext('orderType="Доставка";',c);c.document.getElementById('name').value='Анна';c.document.getElementById('phone').value='291';await c.submitOrder();assert.equal(c.document.getElementById('phone')['aria-invalid'],'true');assert.equal(c.document.getElementById('address')['aria-invalid'],'true');assert.equal(posts,0);assert.equal(notices,0);
+ const html=fs.readFileSync(path.join(root,'public/index.html'),'utf8');assert.doesNotMatch(html,/placeholder="Имя \(без фамилии\)"|reportValidity\(|setCustomValidity\(/);assert.equal((html.match(/placeholder="Имя"/g)||[]).length,2);
+});

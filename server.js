@@ -62,7 +62,7 @@ app.post("/api/checkout", async (req, res) => {
   try {
     if(!orderingOpenNow())return res.status(503).json({error:"Онлайн-заказы принимаются с 10:00 до 22:30",opensAt:"10:00",closesAt:"22:30",timeZone:VENUE_TIME_ZONE});
     const result = await checkout.create(req.body);
-    if (result.error) return res.status(result.status || 400).json({ error: result.error });
+    if (result.error) return res.status(result.status || 400).json({ error: result.error, fieldErrors: globalThis.OrderValidation.validateFields(req.body || {}) });
     return res.status(201).json(result);
   } catch (error) {
     console.error("POST /api/checkout:", error);

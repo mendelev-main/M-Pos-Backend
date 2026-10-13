@@ -19,14 +19,17 @@
     }
     return '';
   }
-  function validate(data){
-    if(!normalizePhone(data.phone))return 'Введите телефон: +375 и 9 цифр номера.';
+  function validateFields(data={}){
+    const errors={};
+    if(!normalizePhone(data.phone))errors.phone='Введите телефон: +375 и 9 цифр номера.';
     const nameError=validateFirstName(data.customerName);
-    if(nameError)return nameError;
-    if(hasProfanity(data.address))return 'Уберите оскорбления и нецензурные выражения из адреса доставки.';
-    if(hasProfanity(data.comment)||(Array.isArray(data.items)&&data.items.some(item=>hasProfanity(item?.comment))))return 'Уберите оскорбления и нецензурные выражения из комментария.';
-    return '';
+    if(nameError)errors.customerName=nameError;
+    if(data.orderType==='Доставка'&&!String(data.address||'').trim())errors.address='Укажите адрес доставки.';
+    else if(hasProfanity(data.address))errors.address='Уберите оскорбления и нецензурные выражения из адреса доставки.';
+    if(hasProfanity(data.comment)||(Array.isArray(data.items)&&data.items.some(item=>hasProfanity(item?.comment))))errors.comment='Уберите оскорбления и нецензурные выражения из комментария.';
+    return errors;
   }
-  root.OrderValidation=Object.freeze({normalizePhone,hasProfanity,validateFirstName,validate});
+  function validate(data){return Object.values(validateFields(data))[0]||'';}
+  root.OrderValidation=Object.freeze({normalizePhone,hasProfanity,validateFirstName,validateFields,validate});
 
 })(globalThis);

@@ -36,3 +36,9 @@ test('backend rejects names, addresses and comments before querying PostgreSQL o
     assert.ok(result.error);
   }
 });
+
+test('field validation reports all invalid fields for quiet inline feedback',()=>{
+ const errors=globalThis.OrderValidation.validateFields({...clean,orderType:'Доставка',customerName:'Иван Иванов',phone:'+375291',address:'',comment:'сучара'});
+ assert.deepEqual(Object.keys(errors),['phone','customerName','address','comment']);
+ assert.deepEqual(globalThis.OrderValidation.validateFields(clean),{});
+});
