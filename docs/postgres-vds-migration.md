@@ -24,15 +24,15 @@ Backend repository: `mendelev-main/M-Pos-Backend`.
 
 Migration branch: `migration/postgres-vds`.
 
-Production/autodeploy branch remains `main` until cutover is explicitly approved.
+Production/autodeploy branch is `main`. Cutover was explicitly authorized and completed on 2026-10-13; the migration changes are being promoted to `main`.
 
 VDS checkout: `/opt/mpos/app`.
 
-Important: the running production container has NOT been rebuilt/restarted from the migration branch. The public domain still points through Caddy to the existing backend on host port 3000.
+Production `mpos-backend` has been rebuilt with the PostgreSQL runtime. Caddy still routes the public domain to loopback host port 3000. The runtime connects to PostgreSQL 17 as `mpos_app`.
 
-Do not run the production deploy script while `/opt/mpos/app` is on the migration branch: the deploy script resets the checkout to `origin/main`.
+The production deploy script resets the checkout to `origin/main`; `main` must contain the native PostgreSQL runtime before normal autodeploy is used.
 
-Do not run `git clean`. `/opt/mpos/app/Dockerfile` is an untracked VDS-only production Dockerfile and is required for builds. A backup also exists at `/opt/mpos/Dockerfile.backend.vds-backup`.
+Do not run `git clean` on the VDS checkout. The production Dockerfile is now included in the repository; its earlier VDS backup is `/opt/mpos/Dockerfile.backend.vds-backup`.
 
 Secrets stay only on the VDS and must never be printed or committed.
 
@@ -187,11 +187,11 @@ Relevant migration commits include:
 
 Important runtime JS files were syntax-checked with Node 22 and passed.
 
-## Temporary integration-test environment
+## Temporary integration-test environment — historical
 
-Production has not been cut over.
+The following describes the pre-cutover test environment. Production cutover is now complete; this temporary backend is stopped.
 
-A separate backend container is running for PostgreSQL integration tests:
+A separate backend container was used for PostgreSQL integration tests:
 
 - container: `mpos-backend-pg-test`
 - Docker network: `mpos_default`
@@ -207,7 +207,7 @@ Health check passed:
 
 The existing Telegram bot container `project-bot` and test backend are both on `mpos_default`.
 
-For checkout integration testing, the bot has been TEMPORARILY redirected from the public production backend to the test backend:
+For checkout integration testing, the bot was temporarily redirected to the test backend. These routes have now been restored to the public backend:
 
 - `VERIFICATION_API_URL` -> `http://mpos-backend-pg-test:3001`
 - `OWNER_API_URL` -> `http://mpos-backend-pg-test:3001`
@@ -278,122 +278,69 @@ UTC time was checked in:
 
 All three clocks matched, so clock skew is not causing verification expiry.
 
-## Current blocker: Telegram confirmation/finalization test
+## Telegram confirmation blocker — resolved
 
-This is the exact point where work is paused.
+The bot's shared secret did not match the temporary PostgreSQL backend's secret. A request using the bot's configured secret returned HTTP 403 before phone confirmation or SQL finalization. The bot maps all non-2xx responses to its generic invalid/completed message.
 
-With a checkout created using the real Telegram phone number:
+The test backend secret was aligned with the production backend/bot secret. A synthetic missing-token request then returned HTTP 409 / NOT_FOUND, proving authorization passed. Production bot -> public backend health and authorization were also verified after cutover. Secret values were not printed or committed.
 
-1. a fresh checkout is created;
-2. the new Telegram deep link is opened;
-3. bot successfully loads the verification and shows the contact-sharing button;
-4. user sends the Telegram contact;
-5. the contact button disappears;
-6. bot responds: `⌛ Подтверждение недействительно или уже завершено.`
+Safe backend logging now records only authorization/confirmation/finalization stage, HTTP status and reason for ordinary rejected confirmations.
 
-Database inspection of previous attempts showed records remaining `PENDING`, with no `telegram_user_id`, `verified_at` or `consumed_at`. One inspection was performed after the five-minute TTL had elapsed, so it did not identify the original rejection reason.
+## Production cutover completed — 2026-10-13
 
-Backend logs currently show no useful entry for this case. That is expected from the code: the confirm route only logs thrown exceptions/500 errors. Normal unsuccessful `phoneVerification.confirm()` results are returned as HTTP 409 without a server log.
+User authorized a clean database, with no migration or preservation of Supabase test data.
 
-The relevant backend route is:
+Completed:
 
-`POST /api/phone-verification/:token/confirm`
+- rebuilt `mpos-backend` with native `pg` runtime;
+- added `backend-db.env` to production Compose;
+- mounted `/opt/mpos/data/product-images:/data/product-images`;
+- set `PRODUCT_IMAGES_DIR=/data/product-images` and `PUBLIC_BASE_URL=https://project-dubrovno.store`;
+- retained loopback-only backend port 3000 and internal-only PostgreSQL;
+- stopped the temporary PostgreSQL backend;
+- cleared all application test rows transactionally and reseeded the owner-auth and customer-notification singleton defaults;
+- restored both bot API URLs to `https://project-dubrovno.store` and restarted the existing single polling bot;
+- verified public health and empty catalog responses.
 
-It first validates `X-Owner-Bot-Secret`, then calls `phoneVerification.confirm()`, and if confirmation succeeds calls `checkout.finalizeByVerificationToken()`.
+Validation:
 
-Possible `phoneVerification.confirm()` failure reasons in current code are:
+- actual PostgreSQL 17 / Node 22 / `mpos_app`: checkout creation, confirmation, finalization, reservation 7 -> 5 and duplicate SQL finalization passed in a rollback-only transaction;
+- persistent image upload and retrieval passed; temporary image removed;
+- production database connection confirmed `mpos_app`, database `mpos`, PostgreSQL 17;
+- bot -> public backend health and shared-secret authorization passed;
+- local native-baseline PGlite integration and PostgreSQL-adapted checkout unit tests passed (3 tests).
 
-- INVALID
-- NOT_FOUND
-- EXPIRED
-- PHONE_MISMATCH
-- ALREADY_USED
+The full historical test suite still contains Supabase mocks and source-pattern assertions and does not pass against the migrated runtime. The targeted native tests do not replace physical POS/Telegram end-to-end acceptance.
 
-A successful confirmation should change the verification from `PENDING` to `VERIFIED`, set `verified_at` and `telegram_user_id`, then checkout finalization should create the order/consume the verification.
+## Remaining operator acceptance
 
-### Exact next diagnostic step
+Synchronize the real iPad/POS catalog and availability into the clean database, then check real images, a Telegram-confirmed order, POS order receipt and loyalty. Menu is intentionally empty until synchronization. Real Telegram contact sharing and physical POS operation were not performed by this agent.
 
-Do not continue blind retries.
+The regular venue opening hours are unchanged; checkout is unavailable after 22:30 Europe/Minsk.
 
-Create one fresh checkout with the real Telegram phone, open its new deep link and send the contact immediately. While the five-minute TTL is still active, capture the exact HTTP status/body returned by the bot's confirm request or add temporary safe diagnostic logging that records only status/reason and never logs phone, verification token, Telegram ID or shared secret.
+## Rollback references
 
-The objective is to determine whether the failure is:
+- original backend image: `mpos-backend:supabase-before-postgres-20261013`;
+- original Compose: `/opt/mpos/docker-compose.yml.bak-pg-cutover-20261013`;
+- bot routing before this cutover: `/opt/mpos/bot.env.bak-before-cutover-20261013` (points to the test backend);
+- original public bot environment: `/opt/mpos/bot.env.bak-pg-test`.
 
-1. authorization (`X-Owner-Bot-Secret`);
-2. `phoneVerification.confirm()` returning one of the reasons above;
-3. confirmation succeeds but `finalize_verified_checkout` returns a failure;
-4. bot maps a different backend response to the generic expiry/completed message.
-
-Once the exact response is known, fix the cause and repeat the full flow. The acceptance condition is:
-
-- verification becomes VERIFIED/CONSUMED as designed;
-- checkout becomes finalized;
-- order and order_items are created;
-- reservation reduces available quantity atomically;
-- Telegram receives a success response;
-- repeated confirmation is idempotent/rejected correctly without duplicate order creation.
-
-## Remaining tests before cutover
-
-After checkout/Telegram confirmation is fixed, test at least:
-
-- local product image upload and retrieval
-- operational heartbeat/snapshot
-- owner-auth read/CAS/login flow
-- loyalty program create/update and `replace_loyalty_program`
-- loyalty sale, reward adjustment/reversal
-- customer notification claim/finish
-- order accept/status/ready flow
-- ready-order cleanup behavior
-- SSE/new-order polling as used by POS
-- tablet/POS synchronization against the fresh PostgreSQL database
-
-Because the product is not yet live, test data should be removed/reset before the real tablet synchronization.
-
-## Production cutover work still required
-
-The production Compose backend currently needs to be wired to the new runtime before cutover:
-
-- include `backend-db.env`
-- mount `/opt/mpos/data/product-images:/data/product-images`
-- set `PRODUCT_IMAGES_DIR=/data/product-images`
-- set `PUBLIC_BASE_URL` to the public site origin
-- keep backend host exposure loopback-only on port 3000
-- keep PostgreSQL internal-only
-
-Before switching production:
-
-1. finish integration tests above;
-2. clean/reset test rows;
-3. ensure migrations 001/002/003 are present and applied;
-4. update Compose backend configuration;
-5. restore the bot from temporary test routing as appropriate for the cutover (after production backend is PostgreSQL, its normal public URL can be used again);
-6. rebuild/restart backend deliberately;
-7. verify public health/menu/order flows;
-8. synchronize the real tablet/POS into the clean database;
-9. verify catalog, availability, orders, Telegram and loyalty end to end;
-10. only then consider merging `migration/postgres-vds` to `main` and restoring normal autodeploy.
-
-Do not retire Supabase until the PostgreSQL production path has been verified and a rollback decision has been made.
+Supabase was not deleted. Before any rollback, restore the original backend image/configuration and the original public bot routing together; the temporary test bot routing must not be restored by itself.
 
 ## Current status summary
 
 Database/schema migration: **done**.
 
-Backend runtime conversion to PostgreSQL: **done in migration branch**.
+Backend runtime conversion and production cutover: **done**.
 
-Supabase runtime dependency removal: **done**.
+Supabase runtime dependency: **removed**.
 
-Temporary PostgreSQL backend: **running and healthy**.
+Production PostgreSQL: **connected and verified**.
 
-Catalog/availability integration: **passed**.
+Temporary PostgreSQL backend: **stopped**.
 
-Atomic order reservation: **passed**.
+Telegram authorization blocker: **resolved**.
 
-Checkout creation: **passed**.
+Database contents: **clean; runtime singleton defaults seeded**.
 
-Telegram verification lookup: **passed**.
-
-Telegram contact confirmation + checkout finalization: **current blocker / under diagnosis**.
-
-Production cutover: **not started**.
+Real tablet synchronization and human Telegram contact-sharing acceptance: **pending operator action**.

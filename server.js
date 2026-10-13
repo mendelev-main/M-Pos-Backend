@@ -107,16 +107,21 @@ app.get("/api/phone-verification/:token", async (req, res) => {
 
 app.post("/api/phone-verification/:token/confirm", async (req, res) => {
   if (!ownerBotAuthorized(req.header("x-owner-bot-secret"), process.env.OWNER_BOT_SHARED_SECRET)) {
+    console.warn("Phone verification rejected", { stage: "authorization", status: 403, reason: "BOT_UNAUTHORIZED" });
     return res.status(403).json({ ok: false, error: "Подтверждение доступно только через бота" });
   }
   try {
     const phone = String(req.body?.phone || "").trim();
     const telegramUserId = req.body?.telegramUserId;
     const result = await phoneVerification.confirm(req.params.token, phone, telegramUserId, ownerBotAuthorized(req.header("x-owner-bot-secret"), process.env.OWNER_BOT_SHARED_SECRET) ? req.body?.telegramUsername : undefined);
-    if (!result.ok) return res.status(409).json(result);
+    if (!result.ok) {
+      console.warn("Phone verification rejected", { stage: "confirmation", status: 409, reason: result.reason });
+      return res.status(409).json(result);
+    }
 
     const finalized = await checkout.finalizeByVerificationToken(req.params.token);
     if (finalized && !finalized.ok) {
+      console.warn("Phone verification rejected", { stage: "finalization", status: 409, reason: finalized.reason });
       const stockError=finalized.reason==="OUT_OF_STOCK"?"Товар закончился или его осталось недостаточно":finalized.reason==="AVAILABILITY_UNAVAILABLE"?"Актуальные остатки временно недоступны":"Не удалось завершить оформление заказа";
       return res.status(409).json({ ok: false, error: stockError, reason: finalized.reason });
     }
