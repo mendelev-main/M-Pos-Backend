@@ -9,6 +9,32 @@ export function loyaltySaleEffectId(events,chatId){
     ? LOYALTY_PARTY_EFFECT_ID : undefined;
 }
 
+export async function setLoyaltyTelegramMenu({botToken,chatId,fetchImpl=fetch,logger=console}){
+  if(!botToken||!chatId)return false;
+  try{
+    const response=await fetchImpl(`https://api.telegram.org/bot${botToken}/setChatMenuButton`,{
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({
+        chat_id:String(chatId),
+        menu_button:{
+          type:'web_app',
+          text:'Новый заказ',
+          web_app:{url:'https://project-dubrovno.store/'},
+        },
+      }),
+      signal:AbortSignal.timeout(10_000),
+    });
+    const result=await response.json().catch(()=>null);
+    if(response.ok&&result?.ok===true)return true;
+    logger.error(`Telegram loyalty menu setup failed (HTTP ${response.status})`);
+    return false;
+  }catch{
+    logger.error('Telegram loyalty menu setup failed (network or timeout)');
+    return false;
+  }
+}
+
 export async function sendLoyaltyTelegram({botToken,chatId,text,events=[],fetchImpl=fetch,logger=console}){
   if(!botToken||!chatId||!text)return false;
   const payload={chat_id:String(chatId),text,disable_web_page_preview:true};
@@ -22,21 +48,6 @@ export async function sendLoyaltyTelegram({botToken,chatId,text,events=[],fetchI
     return {ok:response.ok&&result?.ok===true,status:response.status,result};
   }
   try{
-    // Keep a permanent Telegram menu button that opens the ordering website.
-    await fetchImpl(`https://api.telegram.org/bot${botToken}/setChatMenuButton`,{
-      method:'POST',
-      headers:{'content-type':'application/json'},
-      body:JSON.stringify({
-        chat_id:String(chatId),
-        menu_button:{
-          type:'web_app',
-          text:'Новый заказ',
-          web_app:{url:'https://project-dubrovno.store/'},
-        },
-      }),
-      signal:AbortSignal.timeout(10_000),
-    }).catch(()=>null);
-
     let response=await send(payload);
     // Retry only an explicit effect rejection: an ambiguous timeout may have delivered
     // the first message, and a general retry would send the notification twice.
