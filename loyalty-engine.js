@@ -34,12 +34,12 @@ export function formatLoyaltySaleMessage(events=[],programs=[]){
  const byId=new Map((programs||[]).map(program=>[String(program.id),program]));
  const hasGranted=fresh.some(event=>Number(event.granted)>0),hasRedeemed=fresh.some(event=>Number(event.redeemed)>0);
  const hasAvailable=fresh.some(event=>Number(byId.get(String(event.programId))?.rewards??event.rewards)>0);
- const title=hasGranted?'Поздравляем! Вам доступен подарок 🎉':hasRedeemed?'Подарок использован ✅':hasAvailable?'Ваш подарок уже доступен 🎁':'Спасибо за покупку!';
+ const title=hasGranted?'Ваш подарок уже доступен 🎁':hasRedeemed?'Подарок использован ✅':hasAvailable?'Ваш подарок уже доступен 🎁':'Спасибо за покупку!';
  const sections=fresh.map(event=>{
   const program=byId.get(String(event.programId))||{},name=String(program.name||'Программа лояльности');
   const required=Math.max(1,loyaltyCount(program.required_quantity,1));
   const rewardAvailable=Number(program.rewards??event.rewards)>0;
-  if(rewardAvailable)return `Акция «${name}»\n${loyaltyProgressLine(required,required)} — ${required} из ${required}\n\nУсловия акции выполнены — подарок ваш 🎁\nВыберите подарок при оформлении заказа.\n\nНакопление продолжится после использования подарка.`;
+  if(rewardAvailable)return `Акция «${name}»\n${loyaltyProgressLine(required,required)} — ${required} из ${required}\n\nКак получить подарок:\n\n🏠 В заведении: скажите, что хотите использовать подарок.\n🌐 На сайте: напишите об этом в комментарии к заказу.`;
   const progress=Math.min(required,loyaltyCount(program.progress??event.progress));
   return `Ваш прогресс по акции «${name}»:\n${loyaltyProgressLine(progress,required)} — ${progress} из ${required}\n\n${remainingItems(required-progress)}`;
  });
