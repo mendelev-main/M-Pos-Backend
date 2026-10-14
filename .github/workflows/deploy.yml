@@ -24,6 +24,8 @@ jobs:
       url: https://project-dubrovno.store
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Configure SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.VDS_SSH_KEY }}
@@ -37,18 +39,38 @@ jobs:
           ssh-keyscan -p "$VDS_PORT" -H "$VDS_HOST" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
+      - name: Verify installed migration-aware deployment entrypoint
+        env:
+          VDS_HOST: ${{ secrets.VDS_HOST }}
+          VDS_PORT: ${{ secrets.VDS_PORT }}
+          VDS_USER: ${{ secrets.VDS_USER }}
+        run: |
+          set -euo pipefail
+          EXPECTED_SCRIPT_SHA="$(sha256sum scripts/deploy-backend.sh | awk '{print $1}')"
+          ACTUAL_SCRIPT_SHA="$(ssh \
+            -i ~/.ssh/id_ed25519 \
+            -p "$VDS_PORT" \
+            -o IdentitiesOnly=yes \
+            "$VDS_USER@$VDS_HOST" \
+            'test "$(stat -c "%u:%a" /opt/mpos/scripts/deploy-backend.sh)" = "0:755" && sha256sum /opt/mpos/scripts/deploy-backend.sh' | awk '{print $1}')"
+          test "$ACTUAL_SCRIPT_SHA" = "$EXPECTED_SCRIPT_SHA" || {
+            echo 'Install the reviewed root-owned migration-aware deployment script before releasing.' >&2
+            exit 1
+          }
+
       - name: Deploy backend
         env:
           VDS_HOST: ${{ secrets.VDS_HOST }}
           VDS_PORT: ${{ secrets.VDS_PORT }}
           VDS_USER: ${{ secrets.VDS_USER }}
+          EXPECTED_SHA: ${{ github.sha }}
         run: |
           ssh \
             -i ~/.ssh/id_ed25519 \
             -p "$VDS_PORT" \
             -o IdentitiesOnly=yes \
             "$VDS_USER@$VDS_HOST" \
-            'sudo -n /opt/mpos/scripts/deploy-backend.sh'
+            "sudo -n /opt/mpos/scripts/deploy-backend.sh '$EXPECTED_SHA'"
 
       - name: Verify deployed commit
         env:
