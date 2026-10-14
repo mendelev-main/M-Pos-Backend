@@ -11,7 +11,7 @@ test("loyalty messages show progress and frozen reward state",()=>{
  const progress=formatLoyaltySaleMessage([{programId:'coffee',earned:2,progress:4,rewards:0}], [{id:'coffee',name:'Каждый 6-й кофе',required_quantity:6,progress:4,rewards:0}]);
  assert.match(progress,/● ● ● ● ○ ○/);assert.match(progress,/— 4 из 6/);assert.match(progress,/Ещё 2 товара по акции/);
  const reward=formatLoyaltySaleMessage([{programId:'coffee',granted:1,rewards:1}], [{id:'coffee',name:'Каждый 6-й кофе',required_quantity:6,progress:0,rewards:1}]);
- assert.match(reward,/Поздравляем! Вам доступен подарок 🎉/);assert.match(reward,/● ● ● ● ● ● — 6 из 6/);assert.match(reward,/Накопление продолжится после использования подарка/);
+ assert.match(reward,/Ваш подарок уже доступен 🎁/);assert.match(reward,/● ● ● ● ● ● — 6 из 6/);assert.match(reward,/Как получить подарок/);assert.match(reward,/В заведении: скажите, что хотите использовать подарок/);assert.match(reward,/На сайте: напишите об этом в комментарии к заказу/);
 });
 
 
