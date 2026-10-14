@@ -23,11 +23,6 @@ function loyaltyProgressLine(progress,required){
  const segments=Math.min(10,required),filled=required<=10?progress:Math.floor(progress/required*segments);
  return [...Array(segments)].map((_,index)=>index<filled?'●':'○').join(' ');
 }
-function remainingItems(count){
- const last=count%10,lastTwo=count%100;
- const word=last===1&&lastTwo!==11?'товар':last>=2&&last<=4&&(lastTwo<12||lastTwo>14)?'товара':'товаров';
- return `Ещё ${count} ${word} по акции — и подарок ваш 🎁`;
-}
 export function formatLoyaltySaleMessage(events=[],programs=[]){
  const fresh=(events||[]).filter(event=>event&&!event.duplicate);
  if(!fresh.length)return null;
@@ -41,7 +36,7 @@ export function formatLoyaltySaleMessage(events=[],programs=[]){
   const rewardAvailable=Number(program.rewards??event.rewards)>0;
   if(rewardAvailable)return `Акция «${name}»\n${loyaltyProgressLine(required,required)} — ${required} из ${required}\n\nКак получить подарок:\n\n🏠 В заведении: скажите, что хотите использовать подарок.\n🌐 На сайте: напишите об этом в комментарии к заказу.`;
   const progress=Math.min(required,loyaltyCount(program.progress??event.progress));
-  return `Ваш прогресс по акции «${name}»:\n${loyaltyProgressLine(progress,required)} — ${progress} из ${required}\n\n${remainingItems(required-progress)}`;
+  return `Ваш прогресс по акции «${name}»:\n${loyaltyProgressLine(progress,required)} — ${progress} из ${required}`;
  });
  return `${title}\n\n${sections.join('\n\n')}`;
 }
