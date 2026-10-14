@@ -11,7 +11,16 @@ export function loyaltySaleEffectId(events,chatId){
 
 export async function sendLoyaltyTelegram({botToken,chatId,text,events=[],fetchImpl=fetch,logger=console}){
   if(!botToken||!chatId||!text)return false;
-  const payload={chat_id:String(chatId),text,disable_web_page_preview:true};
+  const payload={
+    chat_id:String(chatId),
+    text,
+    disable_web_page_preview:true,
+    reply_markup:{
+      inline_keyboard:[[
+        {text:'🛒 Новый заказ',url:'https://project-dubrovno.store/'},
+      ]],
+    },
+  };
   const effect=loyaltySaleEffectId(events,chatId);
   if(effect)payload.message_effect_id=effect;
   async function send(body){
