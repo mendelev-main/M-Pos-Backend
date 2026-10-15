@@ -1,0 +1,59 @@
+name: Read-only Flyway production preflight
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/flyway-preflight.yml'
+      - 'scripts/deploy-backend.sh'
+      - 'scripts/setup-delivery-vds.sh'
+permissions:
+  contents: read
+jobs:
+  inspect:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect existing VDS access and migration state without writes
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.VDS_SSH_KEY }}
+          VDS_HOST: ${{ secrets.VDS_HOST }}
+          VDS_PORT: ${{ secrets.VDS_PORT }}
+          VDS_USER: ${{ secrets.VDS_USER }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/flyway-preflight-key"
+          hosts="$RUNNER_TEMP/flyway-preflight-known-hosts"
+          trap 'rm -f "$key" "$hosts"' EXIT
+          for required in SSH_PRIVATE_KEY VDS_HOST VDS_PORT VDS_USER; do
+            if [ -z "${!required:-}" ]; then
+              echo "::error title=Missing SSH configuration::Required Actions binding is empty: $required"
+              exit 1
+            fi
+          done
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          if ! ssh-keyscan -T 10 -p "$VDS_PORT" -H "$VDS_HOST" > "$hosts"; then
+            echo '::error title=SSH transport unavailable::Could not retrieve the configured VDS SSH host key; verify host, port and firewall.'
+            exit 1
+          fi
+          expected=$(sha256sum scripts/deploy-backend.sh | cut -d' ' -f1)
+          installed=$(ssh -i "$key" -p "$VDS_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts" \
+            "$VDS_USER@$VDS_HOST" \
+            'test "$(stat -c "%U %a" /opt/mpos/scripts/deploy-backend.sh)" = "root 755" && sha256sum /opt/mpos/scripts/deploy-backend.sh' | cut -d' ' -f1)
+          if [ "$installed" != "$expected" ]; then
+            echo '::error title=One-time VDS setup required::Installed deployment entrypoint differs from this release. Do not invoke old scripts with preflight arguments.'
+            exit 1
+          fi
+          if ssh -i "$key" -p "$VDS_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts" \
+            "$VDS_USER@$VDS_HOST" \
+            'sudo -n /opt/mpos/scripts/deploy-backend.sh --preflight' > "$RUNNER_TEMP/flyway-preflight.log" 2>&1; then
+            cat "$RUNNER_TEMP/flyway-preflight.log"
+          else
+            summary=$(tail -n 12 "$RUNNER_TEMP/flyway-preflight.log" | tr '\n' ' ' | sed 's/%/%25/g' | head -c 2000)
+            echo "::error title=SSH or database preflight failed::$summary"
+            exit 1
+          fi

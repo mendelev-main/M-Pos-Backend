@@ -1,4 +1,6 @@
 FROM node:22-alpine
+ARG MPOS_BUILD_SHA=unknown
+LABEL org.opencontainers.image.revision=$MPOS_BUILD_SHA
 
 WORKDIR /app
 

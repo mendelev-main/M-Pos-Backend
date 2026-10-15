@@ -1,4 +1,5 @@
 import express from "express";
+import { createDeliveryTariffs } from "./delivery-tariffs.js";
 import { mountOwnerRoutes, ownerBotAuthorized } from "./owner-auth.js";
 import cors from "cors";
 import { createHash, randomUUID } from "node:crypto";
@@ -52,17 +53,38 @@ function advanceCatalogRevision(){catalogRevision=`sync-${Date.now().toString(36
 mountOwnerRoutes(app,{query});
 const phoneVerification = createPhoneVerificationService(query, normalizePhone);
 const availability = createAvailabilityService({ query });
-const checkout = createCheckoutService({ query, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee });
+const deliveryTariffs = createDeliveryTariffs({ query, withTransaction, sourceKey: process.env.DELIVERY_TARIFF_DEVICE_KEY || "" });
+const checkout = createCheckoutService({ query, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee, deliveryTariffs });
 const telegramOrderAlerts = createTelegramOrderAlerts({ query, botToken: process.env.TELEGRAM_BOT_TOKEN });
 const livePosReports = createLivePosReports({ query, createId: () => randomUUID() });
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "prilavok-backend" }));
 
+app.get("/api/delivery-tariffs", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try { res.json(await deliveryTariffs.list()); }
+  catch { res.status(503).json({ error: "Тарифы доставки временно недоступны" }); }
+});
+app.get("/api/device/delivery-tariffs", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    const auth = await deliveryTariffs.authorize(req.header("x-device-key"));
+    if (auth.error) return res.status(auth.status).json(auth);
+    res.json(await deliveryTariffs.list());
+  } catch { res.status(503).json({ error: "Не удалось проверить публикацию тарифов" }); }
+});
+app.put("/api/device/delivery-tariffs", async (req, res) => {
+  try {
+    const result = await deliveryTariffs.publish(req.header("x-device-key"), req.body);
+    res.status(result.status || 200).json(result);
+  } catch { res.status(503).json({ error: "Не удалось сохранить тарифы доставки" }); }
+});
+
 app.post("/api/checkout", async (req, res) => {
   try {
     if(!orderingOpenNow())return res.status(503).json({error:"Онлайн-заказы принимаются с 10:00 до 22:30",opensAt:"10:00",closesAt:"22:30",timeZone:VENUE_TIME_ZONE});
     const result = await checkout.create(req.body);
-    if (result.error) return res.status(result.status || 400).json({ error: result.error, fieldErrors: globalThis.OrderValidation.validateFields(req.body || {}) });
+    if (result.error) return res.status(result.status || 400).json({ error: result.error, code: result.code, fieldErrors: globalThis.OrderValidation.validateFields(req.body || {}) });
     return res.status(201).json(result);
   } catch (error) {
     console.error("POST /api/checkout:", error);
@@ -502,7 +524,7 @@ async function pushNewOrders(){
   }
   if(eventPollBusy || !eventClients.size) return; eventPollBusy = true;
   try {
-    const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.customer_id,o.customer_name,o.phone,o.address,o.comment,o.total,o.delivery_fee,o.created_at,o.updated_at,
+    const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.customer_id,o.customer_name,o.phone,o.address,o.comment,o.total,o.delivery_fee,o.delivery_tariff_id,o.delivery_tariff_name,o.delivery_tariff_version,o.created_at,o.updated_at,
       COALESCE((SELECT jsonb_agg(jsonb_build_object('id',i.id,'product_id',i.product_id,'external_product_id',i.external_product_id,'product_name',i.product_name,'price',i.price,'quantity',i.quantity,'comment',i.comment) ORDER BY i.created_at,i.id) FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS order_items
       FROM public.orders o WHERE o.status='new' ORDER BY o.created_at DESC LIMIT 20`);
     const payload=JSON.stringify({type:"orders",orders:rows||[]});for(const client of eventClients){try{client.res.write(`data: ${payload}\n\n`);}catch(e){}}
@@ -780,7 +802,7 @@ app.post("/api/orders", async (req, res) => {
   } catch (error) { const message=String(error?.message||"");console.error("POST /api/orders:", error);if(message.includes("OUT_OF_STOCK"))return res.status(409).json({error:"Товар закончился или его осталось недостаточно"});if(message.includes("AVAILABILITY_UNAVAILABLE"))return res.status(409).json({error:"Актуальные остатки временно недоступны"});res.status(500).json({ error: "Не удалось создать заказ" }); }
 });
 
-app.get("/api/orders/:token",async(req,res)=>{try{const token=String(req.params.token||"").trim();if(!token)return res.status(400).json({error:"Missing token"});const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.customer_name,o.phone,o.address,o.comment,o.total,o.delivery_fee,o.created_at,o.updated_at,COALESCE((SELECT jsonb_agg(jsonb_build_object('product_name',i.product_name,'price',i.price,'quantity',i.quantity,'comment',i.comment) ORDER BY i.created_at,i.id) FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS order_items FROM public.orders o WHERE o.tracking_token=$1 LIMIT 1`,[token]);const order=rows?.[0];if(!order)return res.status(404).json({error:"Заказ не найден"});res.json({order});}catch(error){console.error("GET /api/orders/:token:",error);res.status(500).json({error:"Не удалось загрузить заказ"})}});
+app.get("/api/orders/:token",async(req,res)=>{try{const token=String(req.params.token||"").trim();if(!token)return res.status(400).json({error:"Missing token"});const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.customer_name,o.phone,o.address,o.comment,o.total,o.delivery_fee,o.delivery_tariff_id,o.delivery_tariff_name,o.delivery_tariff_version,o.created_at,o.updated_at,COALESCE((SELECT jsonb_agg(jsonb_build_object('product_name',i.product_name,'price',i.price,'quantity',i.quantity,'comment',i.comment) ORDER BY i.created_at,i.id) FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS order_items FROM public.orders o WHERE o.tracking_token=$1 LIMIT 1`,[token]);const order=rows?.[0];if(!order)return res.status(404).json({error:"Заказ не найден"});res.json({order});}catch(error){console.error("GET /api/orders/:token:",error);res.status(500).json({error:"Не удалось загрузить заказ"})}});
 
 app.post("/api/orders/:id/accept",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim();if(!id)return res.status(400).json({error:"Invalid order id"});const {rows:existingRows}=await query(`SELECT id,status,external_id,updated_at FROM public.orders WHERE id=$1::uuid LIMIT 1`,[id]);const existing=existingRows?.[0];if(!existing)return res.status(404).json({error:"Заказ не найден"});if(existing.status==="accepted")return res.json({ok:true,order:existing,alreadyAccepted:true});if(existing.status!=="new")return res.status(409).json({error:"Заказ уже изменил статус",order:existing});const {rows}=await query(`UPDATE public.orders SET status='accepted',updated_at=now() WHERE id=$1::uuid AND status='new' RETURNING id,status,external_id,updated_at`,[id]);const order=rows?.[0];if(!order){const {rows:currentRows}=await query(`SELECT id,status,external_id,updated_at FROM public.orders WHERE id=$1::uuid LIMIT 1`,[id]);const current=currentRows?.[0];if(current?.status==="accepted")return res.json({ok:true,order:current,alreadyAccepted:true});return res.status(409).json({error:"Заказ уже изменил статус",order:current||null});}return res.json({ok:true,order});}catch(error){console.error("POST /api/orders/:id/accept:",error);return res.status(500).json({error:"Не удалось принять заказ"})}});
 
