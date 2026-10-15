@@ -3,6 +3,21 @@
 # GitHub passes the full immutable commit SHA; no arbitrary shell arguments.
 set -euo pipefail
 test "$(id -u)" -eq 0 || { echo 'Run through the configured sudo deployment entrypoint' >&2; exit 1; }
+if [ "${1:-}" = --preflight ]; then
+  test -r /opt/mpos/flyway.env
+  test -r /opt/mpos/backend-db.env
+  grep -q '^DELIVERY_TARIFF_DEVICE_KEY=.' /opt/mpos/backend-db.env
+  # Fixed read-only query: no user-provided SQL or privileged Docker access.
+  docker exec mpos-postgres psql -X -U mpos_admin -d mpos -v ON_ERROR_STOP=1 -c "
+    BEGIN READ ONLY;
+    SELECT version,type,success FROM public.flyway_schema_history ORDER BY installed_rank;
+    SELECT to_regclass('public.delivery_tariffs') AS tariffs,
+           to_regclass('public.delivery_tariff_state') AS publication_state;
+    SELECT count(*) AS snapshot_fields FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='orders' AND column_name LIKE 'delivery_tariff_%';
+    COMMIT;"
+  exit 0
+fi
 sha=${1:?Pass the full release SHA}
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 2
 exec 9>/opt/mpos/deploy.lock

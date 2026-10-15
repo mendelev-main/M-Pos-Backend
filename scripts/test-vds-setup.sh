@@ -40,5 +40,6 @@ grep -qx 'DELIVERY_TARIFF_DEVICE_KEY=fixture-tablet-key' "$fixture/backend-db.en
 test "$(stat -c %a "$fixture/backend-db.env")" = 600
 test "$(stat -c %a "$fixture/flyway.env")" = 600
 cmp "$root/scripts/deploy-backend.sh" "$fixture/scripts/deploy-backend.sh"
+bash "$fixture/scripts/deploy-backend.sh" --preflight > "$fixture/preflight.log"
 if bash "$root/scripts/setup-delivery-vds.sh" > "$fixture/repeat.log" 2>&1; then echo 'Existing history was rebaselined' >&2; exit 1; fi
 echo 'VDS setup checks passed: schema mismatch refusal, verified restore, explicit baseline/migration, private tablet binding, repeat refusal.'
