@@ -1,6 +1,6 @@
 # Flyway migrations before backend deployment
 
-Flyway Community 11.8.2 is pinned by image digest in `db/flyway-image.txt`. Production activation still requires initial server setup; the current task does not have VDS access.
+Flyway Community 11.8.2 is pinned by image digest in `db/flyway-image.txt`. Activation requires one-time administrative setup on the VDS. SSH access is available, but the current account can run only the old deployment entrypoints without a sudo password.
 
 ## Deployment contract
 
@@ -37,3 +37,7 @@ Flyway locks its history and the deployment script serializes the release; migra
 `bash scripts/test-flyway.sh` uses a disposable PostgreSQL 17 container on an isolated Docker network without a host port. Trust authentication is confined to that disposable test cluster. It tests fresh 001–004 migration, no-op repeat/validation, refusal of an unbaselined nonempty database, explicit baseline at 3 followed only by 004, checksum rejection and rollback of a deliberately failing migration. It deletes only its own test resources.
 
 Production baseline, migration and deployment have not been executed here. Tests exercise the actual pinned Flyway image; the remote SSH/sudo/Compose entrypoint must still be provisioned and verified on the VDS.
+
+## One-time setup helper for this VDS
+
+`bash scripts/setup-delivery-vds.sh [tablet-device-uuid]` must be run with interactive sudo from a reviewed release archive outside `/opt/mpos/app`. It selects the sole active tablet or stops and lists non-secret device IDs for explicit selection. It makes a private custom-format DB backup, compares the live schema with 001–003 in a disposable PostgreSQL cluster with networking disabled, checks singleton rows/ownership and restores the backup into a separate disposable database. Any schema mismatch stops before baseline. The helper then derives private Flyway credentials from the existing PostgreSQL container, explicitly baselines version 3, migrates/validates 004, securely binds the existing tablet key and installs the root-owned deployment entrypoint. It never prints keys/passwords and does not deploy or restart backend. Backups are kept root-only under `/opt/mpos/delivery-backup.*`. Existing Flyway history causes a stop rather than automatic repair/rebaseline. The actual live schema remains unverified until this helper runs successfully.

@@ -11,5 +11,5 @@ for file in "$source_dir/"*.sql; do
   test "$(awk '!/^--/ && NF {print;exit}' "$file")" = 'BEGIN;' || { echo "Unsupported transaction wrapper: $name" >&2; exit 1; }
   test "$(tail -n 1 "$file")" = 'COMMIT;' || exit 1
   # Flyway owns the transaction; retain the stable blank lines and SQL bodies.
-  sed '0,/^BEGIN;$/s/^BEGIN;$//; ${s/^COMMIT;$//;}' "$file" > "$destination/$output"
+  sed '1,/^BEGIN;$/s/^BEGIN;$//; $s/^COMMIT;$//' "$file" > "$destination/$output"
 done

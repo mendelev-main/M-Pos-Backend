@@ -17,3 +17,5 @@ jobs:
       - run: npm test
       - name: Flyway PostgreSQL integration
         run: bash scripts/test-flyway.sh
+      - name: One-time VDS setup integration
+        run: sudo -E bash scripts/test-vds-setup.sh
