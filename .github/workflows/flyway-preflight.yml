@@ -38,6 +38,15 @@ jobs:
             echo '::error title=SSH transport unavailable::Could not retrieve the configured VDS SSH host key; verify host, port and firewall.'
             exit 1
           fi
+          expected=$(sha256sum scripts/deploy-backend.sh | cut -d' ' -f1)
+          installed=$(ssh -i "$key" -p "$VDS_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts" \
+            "$VDS_USER@$VDS_HOST" \
+            'test "$(stat -c "%U %a" /opt/mpos/scripts/deploy-backend.sh)" = "root 755" && sha256sum /opt/mpos/scripts/deploy-backend.sh' | cut -d' ' -f1)
+          if [ "$installed" != "$expected" ]; then
+            echo '::error title=One-time VDS setup required::Installed deployment entrypoint differs from this release. Do not invoke old scripts with preflight arguments.'
+            exit 1
+          fi
           if ssh -i "$key" -p "$VDS_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts" \
             "$VDS_USER@$VDS_HOST" \
