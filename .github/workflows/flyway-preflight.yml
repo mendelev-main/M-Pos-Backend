@@ -25,12 +25,26 @@ jobs:
           key="$RUNNER_TEMP/flyway-preflight-key"
           hosts="$RUNNER_TEMP/flyway-preflight-known-hosts"
           trap 'rm -f "$key" "$hosts"' EXIT
-          test -n "$SSH_PRIVATE_KEY" && test -n "$VDS_HOST" && test -n "$VDS_PORT" && test -n "$VDS_USER"
+          for required in SSH_PRIVATE_KEY VDS_HOST VDS_PORT VDS_USER; do
+            if [ -z "${!required:-}" ]; then
+              echo "::error title=Missing SSH configuration::Required Actions binding is empty: $required"
+              exit 1
+            fi
+          done
           umask 077
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
-          ssh-keyscan -T 10 -p "$VDS_PORT" -H "$VDS_HOST" > "$hosts"
-          ssh -i "$key" -p "$VDS_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+          if ! ssh-keyscan -T 10 -p "$VDS_PORT" -H "$VDS_HOST" > "$hosts"; then
+            echo '::error title=SSH transport unavailable::Could not retrieve the configured VDS SSH host key; verify host, port and firewall.'
+            exit 1
+          fi
+          if ssh -i "$key" -p "$VDS_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts" \
             "$VDS_USER@$VDS_HOST" \
             'id; sudo -n docker exec -i mpos-postgres psql -X -U mpos_admin -d mpos -v ON_ERROR_STOP=1' \
-            < scripts/flyway-preflight.sql
+            < scripts/flyway-preflight.sql > "$RUNNER_TEMP/flyway-preflight.log" 2>&1; then
+            cat "$RUNNER_TEMP/flyway-preflight.log"
+          else
+            summary=$(tail -n 12 "$RUNNER_TEMP/flyway-preflight.log" | tr '\n' ' ' | sed 's/%/%25/g' | head -c 2000)
+            echo "::error title=SSH or database preflight failed::$summary"
+            exit 1
+          fi
