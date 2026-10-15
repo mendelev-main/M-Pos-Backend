@@ -32,8 +32,9 @@ body::before{display:none!important;}
 .product .body,.product .info{padding:18px 19px 20px;}
 .product .name{font-size:19px;line-height:1.22;font-weight:690;letter-spacing:-.02em;}
 .product .desc{font-size:13px;line-height:1.42;color:#858b94;}
-.product-wrap .info{display:flex;flex-direction:column;min-height:156px;}
-.product-wrap .info .price{margin-top:auto;padding-top:16px;}
+.product-wrap .info{display:flex;flex-direction:column;gap:8px;}
+.product-wrap .info .desc,.product-wrap .info .price{margin-top:0;}
+.product-wrap .info .price{padding-top:0;}
 .add,.unavailable{box-sizing:border-box;min-width:112px;min-height:42px;padding:0 16px!important;justify-content:center;border-radius:var(--guest-control-radius)!important;font-size:13px!important;line-height:1.2;}
 .product-wrap .unavailable{margin-top:12px;}
 
@@ -52,7 +53,7 @@ body::before{display:none!important;}
 @keyframes soldOutPulse{0%{box-shadow:0 0 0 0 rgba(239,118,94,.38)}70%,100%{box-shadow:0 0 0 9px rgba(239,118,94,0)}}
 
 @media(min-width:1400px){.site-topin,.topin{max-width:var(--guest-width)!important}.wrap,.shell{max-width:var(--guest-width)!important}}
-@media(max-width:560px){:root{--guest-gutter:14px}.site-top,.top{padding:11px var(--guest-gutter)!important}.site-top .brand,.top .brand{font-size:12px!important}.product .body,.product .info{padding:13px 13px 15px}.product .name{font-size:16px}.product .desc{font-size:12px}.product-wrap .info{min-height:166px}.add,.unavailable{min-width:100%;min-height:40px;padding:0 10px!important;font-size:12px!important}}
+@media(max-width:560px){:root{--guest-gutter:14px}.site-top,.top{padding:11px var(--guest-gutter)!important}.site-top .brand,.top .brand{font-size:12px!important}.product .body,.product .info{padding:13px 13px 15px}.product .name{font-size:16px}.product .desc{font-size:12px}.add,.unavailable{min-width:100%;min-height:40px;padding:0 10px!important;font-size:12px!important}}
 @media(prefers-reduced-motion:reduce){.sold-out-layer::before,.unavailable::before{animation:none!important}}
 
 /* Shared choice controls; one coral sector identifies the current dish. */
