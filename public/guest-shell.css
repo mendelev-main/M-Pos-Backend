@@ -33,6 +33,7 @@ body::before{display:none!important;}
 .product .name{font-size:19px;line-height:1.22;font-weight:690;letter-spacing:-.02em;}
 .product .desc{font-size:13px;line-height:1.42;color:#858b94;}
 .product-wrap .info{display:flex;flex-direction:column;gap:8px;}
+.product-wrap .name{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;min-height:2.44em;max-height:2.44em;}
 .product-wrap .info .desc,.product-wrap .info .price{margin-top:0;}
 .product-wrap .info .price{padding-top:0;}
 .add,.unavailable{box-sizing:border-box;min-width:112px;min-height:42px;padding:0 16px!important;justify-content:center;border-radius:var(--guest-control-radius)!important;font-size:13px!important;line-height:1.2;}
