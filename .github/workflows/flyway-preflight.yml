@@ -1,0 +1,36 @@
+name: Read-only Flyway production preflight
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/flyway-preflight.yml'
+      - 'scripts/flyway-preflight.sql'
+permissions:
+  contents: read
+jobs:
+  inspect:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect existing VDS access and migration state without writes
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.VDS_SSH_KEY }}
+          VDS_HOST: ${{ secrets.VDS_HOST }}
+          VDS_PORT: ${{ secrets.VDS_PORT }}
+          VDS_USER: ${{ secrets.VDS_USER }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/flyway-preflight-key"
+          hosts="$RUNNER_TEMP/flyway-preflight-known-hosts"
+          trap 'rm -f "$key" "$hosts"' EXIT
+          test -n "$SSH_PRIVATE_KEY" && test -n "$VDS_HOST" && test -n "$VDS_PORT" && test -n "$VDS_USER"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          ssh-keyscan -T 10 -p "$VDS_PORT" -H "$VDS_HOST" > "$hosts"
+          ssh -i "$key" -p "$VDS_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts" \
+            "$VDS_USER@$VDS_HOST" \
+            'id; sudo -n docker exec -i mpos-postgres psql -X -U mpos_admin -d mpos -v ON_ERROR_STOP=1' \
+            < scripts/flyway-preflight.sql
