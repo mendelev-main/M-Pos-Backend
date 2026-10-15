@@ -41,7 +41,7 @@ jobs:
           if ssh -i "$key" -p "$VDS_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts" \
             "$VDS_USER@$VDS_HOST" \
-            'sudo -n /opt/mpos/scripts/deploy-backend.sh --preflight' \ > "$RUNNER_TEMP/flyway-preflight.log" 2>&1; then
+            'sudo -n /opt/mpos/scripts/deploy-backend.sh --preflight' > "$RUNNER_TEMP/flyway-preflight.log" 2>&1; then
             cat "$RUNNER_TEMP/flyway-preflight.log"
           else
             summary=$(tail -n 12 "$RUNNER_TEMP/flyway-preflight.log" | tr '\n' ' ' | sed 's/%/%25/g' | head -c 2000)
