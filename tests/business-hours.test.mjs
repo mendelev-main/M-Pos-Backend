@@ -21,6 +21,7 @@ test("overnight page shows the venue message and working hours",()=>{
  assert.match(evening,/Встретимся завтра в 10:00/);
  assert.match(evening,/sleeping-mascot-v1.webp/);
  assert.match(evening,/href="\/menu\/"/);
+ assert.match(evening,/href="\/privacy\/manage"/);
  const morning=closedPageHtml({ordering:true,date:at("2026-10-04T04:00:00Z")});
  assert.match(morning,/сегодня в 10:00/);
 });
