@@ -78,3 +78,5 @@ body::before{display:none!important;}
 .cartbar{isolation:isolate;overflow:visible}.cartbar::after{content:"";position:absolute;z-index:0;left:0;right:0;top:calc(100% - 1px);height:calc(120px + env(safe-area-inset-bottom));background:#08090b;pointer-events:none}.cartbar .cartbtn{position:relative;z-index:1}
 
 .site-footer{margin-top:32px;padding:24px 0;border-top:1px solid rgba(255,255,255,.1);text-align:center;font-size:13px;line-height:1.6}.site-footer a{color:#aeb3bd;text-underline-offset:4px}.site-footer a:hover{color:#fff}.site-footer a:focus-visible{outline:2px solid #fff;outline-offset:5px;border-radius:3px}
+
+.site-footer-links{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px 20px}.site-footer-links a{display:inline-block}
