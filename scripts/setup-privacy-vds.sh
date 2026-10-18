@@ -27,8 +27,7 @@ done
 $ready || { echo 'Restore check did not start; contact deletion remains unchanged' >&2; exit 1; }
 docker exec -i "$audit" pg_restore -U mpos_admin -d restore_check --exit-on-error --no-owner --no-privileges < "$backup" >/dev/null
 # No sale, ledger, item, payment or stock row is removed by contact cleanup.
+bash "$root/scripts/setup-privacy-backup-timer.sh"
 sql -c "UPDATE public.privacy_retention_state SET apply_order_contacts=true WHERE id=true;"
-install -o root -g root -m 600 /dev/null /etc/cron.d/mpos-private-backup
-printf '17 3 * * * root /opt/mpos/scripts/backup-privacy-vds.sh >/dev/null 2>&1\n' > /etc/cron.d/mpos-private-backup
 sql -c 'SELECT public.run_privacy_retention(true) AS maintenance;'
 printf 'Setup complete. Full restore verified. Daily managed backups retained for 30 days.\nContact deletion enabled. Older backup folders, downloaded tablet backups and Telegram histories require separate operator review.\n'

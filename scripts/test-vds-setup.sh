@@ -4,11 +4,17 @@ set -euo pipefail
 test "$(id -u)" -eq 0
 test ! -e /opt/mpos && test ! -L /opt/mpos
 test ! -e /etc/cron.d/mpos-private-backup
+test ! -e /etc/systemd/system/mpos-private-backup.timer
+test ! -e /etc/systemd/system/mpos-private-backup.service
 if docker inspect mpos-postgres >/dev/null 2>&1; then echo 'Existing database container; refusing fixture setup' >&2; exit 1; fi
 root=$(cd "$(dirname "$0")/.." && pwd)
 fixture=$(mktemp -d)
 network=mpos-setup-test-$$
 cleanup(){
+  systemctl disable --now mpos-private-backup.timer >/dev/null 2>&1 || true
+  systemctl stop mpos-private-backup.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/mpos-private-backup.timer /etc/systemd/system/mpos-private-backup.service
+  systemctl daemon-reload
   docker rm -fv mpos-postgres >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
   if [ "$(readlink /opt/mpos)" = "$fixture" ]; then rm /opt/mpos; fi
@@ -50,11 +56,13 @@ echo 'VDS setup checks passed: schema mismatch refusal, verified restore, explic
 if ! bash "$root/scripts/setup-privacy-vds.sh" > "$fixture/privacy-setup.log" 2>&1; then cat "$fixture/privacy-setup.log"; exit 1; fi
 test "$(sql -Atc 'SELECT apply_order_contacts FROM public.privacy_retention_state')" = t
 test "$(stat -c %a /opt/mpos/privacy-backups)" = 700
-test "$(stat -c %a /etc/cron.d/mpos-private-backup)" = 600
+systemctl is-enabled --quiet mpos-private-backup.timer
+systemctl is-active --quiet mpos-private-backup.timer
+test "$(systemctl show -p Result --value mpos-private-backup.service)" = success
 old=/opt/mpos/privacy-backups/mpos-expired-fixture.dump
 touch -d '35 days ago' "$old"
 touch /opt/mpos/privacy-backups/unmanaged.dump
 bash /opt/mpos/scripts/backup-privacy-vds.sh >/dev/null
 test ! -e "$old"
 test -e /opt/mpos/privacy-backups/unmanaged.dump
-echo 'Privacy setup checks passed: private backup, full isolated restore, cleanup enabled, scoped backup retention.'
+echo 'Privacy setup checks passed: private backup, full isolated restore, cleanup enabled, scoped backup retention, enabled active systemd timer and successful backup service.'
