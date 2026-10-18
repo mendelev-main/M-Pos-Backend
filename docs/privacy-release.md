@@ -1,6 +1,6 @@
 # Privacy and optional loyalty release
 
-Migrations 005–006 are additive. Existing memberships are not invented from old customer/purchase rows. Verified online checkout captures order acknowledgement and optional loyalty separately, along with the immutable legal edition. Old public order creation is retired; checkout is the sole public entry point. Re-enrollment uses a fresh checked and verified checkout. Unchecking a later order is not withdrawal.
+Migrations 005–007 are additive. Existing memberships are not invented from old customer/purchase rows. Verified online checkout captures order acknowledgement and optional loyalty separately, along with the immutable legal edition. Old public order creation is retired; checkout is the sole public entry point. Re-enrollment uses a fresh checked and verified checkout. Unchecking a later order is not withdrawal.
 
 Paid POS orders carry the membership version and purchase time captured locally before publication. The database serializes sales, administrative adjustments, withdrawal, expiry and refund through a customer lock. All programs in one sale are applied in a transaction. Duplicate sales do not renew membership; old signatures/private internals cannot bypass consent. Termination offsets gift/progress balances through auditable ledger adjustments; refund reversals cannot restore gifts for terminated membership.
 
@@ -17,10 +17,12 @@ Old customer profiles without verified membership are frozen for loyalty, with t
 
 ## Verification
 
-Backend Node tests include actual native migrations 001–006 under `mpos_app` using PostgreSQL WASM, strict choices before contacts are stored, verified enrollment, idempotence, stale checkouts, versions, expiry, refund after withdrawal, bounded cleanup, contact removal preserving totals/items, and private function denial. GitHub Actions additionally tests Flyway on PostgreSQL 17 and an isolated VDS fixture with backup/restore/setup. Shared POS and Android suites run in Actions; no local JS/JVM test, lint or APK assembly was run for Android.
+Backend Node tests include actual native migrations 001–007 under `mpos_app` using PostgreSQL WASM, strict choices before contacts are stored, verified enrollment, idempotence, stale checkouts, versions, expiry, refund after withdrawal, bounded cleanup, contact removal preserving totals/items, and private function denial. GitHub Actions additionally tests Flyway on PostgreSQL 17 and an isolated VDS fixture with backup/restore/setup. Shared POS and Android suites run in Actions; no local JS/JVM test, lint or APK assembly was run for Android.
 
 Physical acceptance remains required on the tablet: update over existing installation, verified opt-in, ordinary no-opt-in order, reward use, withdrawal, reconnect, and restore a pre-withdrawal backup. External file retention is an operator procedure, not an APK feature.
 
 Checkout is open daily 10:00–22:00 Europe/Minsk, including on already-open browser tabs; the API enforces the same boundary. Menu and privacy withdrawal remain available around the clock. A pre-22:00 checkout cannot be finalized after closing.
 
 The executable ready-server root override enforces the same ordering hours. Its legacy 24-hour deletion of entire ready orders/items has been removed; only contact retention runs through the central worker.
+
+Checkout acquires the customer privacy lock before its upsert, matching sale/withdrawal/profile-cleanup lock order. Its private pre-wrapper entry point is not executable by mpos_app.
