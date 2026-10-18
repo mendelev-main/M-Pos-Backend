@@ -12,7 +12,7 @@ import '../public/order-validation.js';
 const hash=s=>createHash('sha256').update(s).digest('hex');
 async function fixture(){
  const db=new PGlite({extensions:{pgcrypto}});await db.exec('CREATE ROLE mpos_app;');const name=(await db.query('select current_database() as name')).rows[0].name;
- for(const file of ['001_baseline','002_owner_auth','003_runtime_defaults','004_delivery_tariffs','005_privacy_membership']){let sql=readFileSync(new URL('../db/migrations/'+file+'.sql',import.meta.url),'utf8');sql=sql.replace('GRANT CONNECT ON DATABASE mpos TO mpos_app;',`GRANT CONNECT ON DATABASE "${name}" TO mpos_app;`);await db.exec(sql);}
+ for(const file of ['001_baseline','002_owner_auth','003_runtime_defaults','004_delivery_tariffs','005_privacy_membership','006_confirmed_checkout_retention']){let sql=readFileSync(new URL('../db/migrations/'+file+'.sql',import.meta.url),'utf8');sql=sql.replace('GRANT CONNECT ON DATABASE mpos TO mpos_app;',`GRANT CONNECT ON DATABASE "${name}" TO mpos_app;`);await db.exec(sql);}
  await db.exec('SET ROLE mpos_app;');const query=(s,p)=>db.query(s,p);const phoneVerification=createPhoneVerificationService(query,globalThis.OrderValidation.normalizePhone);const checkout=createCheckoutService({query,normalizePhone:globalThis.OrderValidation.normalizePhone,validateOrderContact:globalThis.OrderValidation.validate,phoneVerification,validateLegal:validateLegalAcknowledgement});
  const device=(await query("insert into devices(device_key,name) values('privacy-test','Test') returning id")).rows[0].id;const product=(await query("insert into products(name,external_id,available_online,price) values('Test','test',true,3) returning id")).rows[0].id;await query('select public.store_availability_snapshot($1,1,now(),$2::jsonb,ARRAY[]::text[])',[device,JSON.stringify([{externalId:'test',quantity:100}])]);
  async function order(optIn,phone='+375290000001'){const x=await checkout.create({legal:{version:LEGAL_VERSION,acknowledged:true},loyaltyOptIn:optIn,customerName:'Test',phone,items:[{productId:product,quantity:1}]});assert.equal(x.status,'PENDING');const token=new URL(x.telegramUrl).searchParams.get('start');return {x,token,async confirm(){await phoneVerification.confirm(token,phone,'123');return checkout.finalizeByVerificationToken(token);}};}
@@ -39,7 +39,8 @@ test('actual PostgreSQL migration verifies consent, withdrawal, stale checkout, 
   await f.query("update loyalty_memberships set expires_at=now()-interval '1 day'");await f.privacy.maintain({apply:false});assert.equal((await f.query('select status from loyalty_memberships')).rows[0].status,'active');await f.privacy.maintain({apply:true});assert.equal((await f.query('select status from loyalty_memberships')).rows[0].status,'expired');
   assert.deepEqual(await balance(),{progress:0,rewards:0});
   assert.equal((await f.query('select count(*)::int as n from loyalty_ledger')).rows[0].n,4);
-  await f.query("update checkout_sessions set expires_at=now()-interval '2 days'");const report=await f.privacy.maintain({apply:true});assert.equal(report.applied,true);assert.equal((await f.query('select count(*)::int as n from checkout_sessions')).rows[0].n,0);assert.equal((await f.query('select count(*)::int as n from orders')).rows[0].n,4);assert.equal((await f.query('select count(*)::int as n from legal_document_archive')).rows[0].n,4);
+  await f.order(false);
+  await f.query("update checkout_sessions set expires_at=now()-interval '2 days'");const report=await f.privacy.maintain({apply:true});assert.equal(report.applied,true);assert.equal((await f.query('select count(*)::int as n from checkout_sessions')).rows[0].n,4);assert.equal((await f.query('select count(*)::int as n from orders')).rows[0].n,4);assert.equal((await f.query('select count(*)::int as n from legal_document_archive')).rows[0].n,4);
  }finally{await f.db.close();}
 });
 
@@ -73,7 +74,7 @@ test('sale consent version, actual purchase time, refund after withdrawal and co
   await f.query("update checkout_sessions set expires_at=now()-interval '2 days'");
   await f.query('update privacy_retention_state set apply_order_contacts=true');
   await f.privacy.maintain({apply:true});
-  const row=(await f.query('select * from orders where id=$1',[order.orderId])).rows[0];assert.equal(row.phone,null);assert.equal(row.customer_id,null);assert.equal(row.total,before);
+  const row=(await f.query('select * from orders where id=$1',[order.orderId])).rows[0];assert.equal(row.phone,null);assert.equal(row.customer_id,null);assert.equal(row.total,before);assert.equal((await f.query('select count(*)::int as n from checkout_sessions where order_id=$1',[order.orderId])).rows[0].n,0);
   assert.ok((await f.query("select * from privacy_pos_tasks where task_type='redact_order' and order_id=$1",[order.orderId])).rows.length);
   assert.equal((await f.query('select count(*)::int as n from order_items where order_id=$1',[order.orderId])).rows[0].n,1);
  }finally{await f.db.close();}

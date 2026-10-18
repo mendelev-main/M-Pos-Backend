@@ -2,8 +2,8 @@ import express from "express";
 import { createCustomerOrderNotificationWorker } from "./customer-order-notifications.js";
 import { sendLoyaltyTelegram } from "./loyalty-telegram.js";
 import { readFile } from "node:fs/promises";
-import { closedPageHtml, isSiteSleepWindow, millisecondsUntilSiteWake } from "./business-hours.js";
-import { query, withTransaction } from "./db/index.js";
+import { closedPageHtml, isOrderingOpen, isSiteSleepWindow, millisecondsUntilSiteWake } from "./business-hours.js";
+import { query } from "./db/index.js";
 
 let runningApp = null;
 const originalListen = express.application.listen;
@@ -66,6 +66,7 @@ async function sendCustomerTelegram(chatId,text,events=[]) {
 runningApp.get("/", async (_req, res) => {
   try {
     if(isSiteSleepWindow()){res.setHeader("Cache-Control","no-store");res.setHeader("Retry-After",String(Math.ceil(millisecondsUntilSiteWake()/1000)));return res.status(503).type("html").send(closedPageHtml())}
+    if(!isOrderingOpen()){res.setHeader("Cache-Control","no-store");return res.type("html").send(closedPageHtml({ordering:true}));}
     let html = await readFile(new URL("./public/index.html", import.meta.url), "utf8");
     const oldStatus = "function statusInfo(status){return ['accepted','in_work','ready','delivering','completed'].includes(status)?['Заказ подтверждён','',true]:status==='new'?['Ожидает подтверждения','',false]:['Статус уточняется','',false]}";
     const newStatus = "function statusInfo(status){return status==='ready'?['Заказ готов','',true]:status==='accepted'||status==='in_work'?['Заказ подтвержден','',false]:status==='new'?['Заказ создан','',false]:['Статус уточняется','',false]}";
@@ -140,21 +141,5 @@ const notifyCreatedOrders=createCustomerOrderNotificationWorker({query,botToken:
 setTimeout(notifyCreatedOrders,3000);
 setInterval(notifyCreatedOrders,3000);
 
-// Once a day remove ready orders that have already been kept for 24 hours.
-// Delete child rows explicitly so cleanup works regardless of FK cascade setup.
-async function cleanupReadyOrders() {
-  try {
-    if(isSiteSleepWindow())return;
-    const cutoff=new Date(Date.now()-24*60*60*1000).toISOString();
-    const removed=await withTransaction(async client=>{
-      const {rows}=await client.query(`SELECT id FROM public.orders WHERE status='ready' AND updated_at<$1::timestamptz ORDER BY updated_at LIMIT 500 FOR UPDATE`,[cutoff]);
-      const ids=rows.map(row=>row.id);if(!ids.length)return 0;
-      await client.query(`DELETE FROM public.order_items WHERE order_id=ANY($1::uuid[])`,[ids]);
-      await client.query(`DELETE FROM public.orders WHERE id=ANY($1::uuid[]) AND status='ready'`,[ids]);
-      return ids.length;
-    });
-    if(removed)console.log(`Daily cleanup removed ${removed} ready orders`);
-  } catch(error){console.error("Daily ready-order cleanup:",error);}
-}
-setTimeout(cleanupReadyOrders, 60 * 1000);
-setInterval(cleanupReadyOrders, 24 * 60 * 60 * 1000);
+// Contact retention runs through the privacy maintenance worker in server.js.
+// Financial order/item history is retained; ready status alone does not mean paid.
