@@ -3,6 +3,7 @@
 set -euo pipefail
 test "$(id -u)" -eq 0
 test ! -e /opt/mpos && test ! -L /opt/mpos
+test ! -e /etc/cron.d/mpos-private-backup
 if docker inspect mpos-postgres >/dev/null 2>&1; then echo 'Existing database container; refusing fixture setup' >&2; exit 1; fi
 root=$(cd "$(dirname "$0")/.." && pwd)
 fixture=$(mktemp -d)
@@ -11,6 +12,7 @@ cleanup(){
   docker rm -fv mpos-postgres >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
   if [ "$(readlink /opt/mpos)" = "$fixture" ]; then rm /opt/mpos; fi
+  rm -f /etc/cron.d/mpos-private-backup
   rm -rf "$fixture"
 }
 trap cleanup EXIT
@@ -43,3 +45,16 @@ cmp "$root/scripts/deploy-backend.sh" "$fixture/scripts/deploy-backend.sh"
 bash "$fixture/scripts/deploy-backend.sh" --preflight > "$fixture/preflight.log"
 if bash "$root/scripts/setup-delivery-vds.sh" > "$fixture/repeat.log" 2>&1; then echo 'Existing history was rebaselined' >&2; exit 1; fi
 echo 'VDS setup checks passed: schema mismatch refusal, verified restore, explicit baseline/migration, private tablet binding, repeat refusal.'
+
+# Privacy setup verifies a complete restore before enabling contact cleanup.
+if ! bash "$root/scripts/setup-privacy-vds.sh" > "$fixture/privacy-setup.log" 2>&1; then cat "$fixture/privacy-setup.log"; exit 1; fi
+test "$(sql -Atc 'SELECT apply_order_contacts FROM public.privacy_retention_state')" = t
+test "$(stat -c %a /opt/mpos/privacy-backups)" = 700
+test "$(stat -c %a /etc/cron.d/mpos-private-backup)" = 600
+old=/opt/mpos/privacy-backups/mpos-expired-fixture.dump
+touch -d '35 days ago' "$old"
+touch /opt/mpos/privacy-backups/unmanaged.dump
+bash /opt/mpos/scripts/backup-privacy-vds.sh >/dev/null
+test ! -e "$old"
+test -e /opt/mpos/privacy-backups/unmanaged.dump
+echo 'Privacy setup checks passed: private backup, full isolated restore, cleanup enabled, scoped backup retention.'

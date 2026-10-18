@@ -1,0 +1,8 @@
+(()=>{
+ let token=null,busy=false;const el=id=>document.getElementById(id),note=s=>{el('status').textContent=s;};
+ async function api(path,body){const response=await fetch(path,{method:body?'POST':'GET',cache:'no-store',headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},...(body?{body:JSON.stringify(body)}:{})});const result=await response.json();if(!response.ok)throw Error(result.error||'Не удалось выполнить запрос');return result;}
+ async function work(action){if(busy)return;busy=true;try{await action();}catch(e){note(e.message);}finally{busy=false;}}
+ el('start').onclick=()=>work(async()=>{token=null;el('withdraw').hidden=true;el('telegram').hidden=true;el('check').hidden=true;const x=await api('/api/privacy/access',{phone:el('phone').value});token=x.token;const url=new URL(x.telegramUrl);if(url.origin!=='https://t.me')throw Error('Недопустимая ссылка подтверждения');el('telegram').href=url.href;el('telegram').hidden=false;el('check').hidden=false;note('Откройте Telegram и подтвердите свой телефон, затем вернитесь сюда.');});
+ el('check').onclick=()=>work(async()=>{const x=await api('/api/privacy/session');note(!x.verified?'Телефон ещё не подтверждён.':x.active?'Вы участвуете в программе.':'Действующее участие не найдено.');el('withdraw').hidden=!x.verified||!x.canWithdraw;});
+ el('withdraw').onclick=()=>work(async()=>{if(!confirm('Прекратить участие в лояльности и отозвать согласие? Оставшиеся подарки и накопления будут аннулированы. Обычные заказы будут доступны.'))return;await api('/api/privacy/withdraw',{});el('withdraw').hidden=true;note('Согласие отозвано. Участие прекращено, подарки и накопления аннулированы. Обработка запроса на данные выполняется отдельно с учётом законных оснований.');});
+})();

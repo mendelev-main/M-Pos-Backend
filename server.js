@@ -1,3 +1,5 @@
+import { createPrivacyService, validateLegalAcknowledgement, publicLegalConfiguration } from "./privacy-service.js";
+import { legalHtml, loyaltyProgramsHtml } from "./legal-documents.js";
 import express from "express";
 import { createDeliveryTariffs } from "./delivery-tariffs.js";
 import { mountOwnerRoutes, ownerBotAuthorized } from "./owner-auth.js";
@@ -54,10 +56,31 @@ mountOwnerRoutes(app,{query});
 const phoneVerification = createPhoneVerificationService(query, normalizePhone);
 const availability = createAvailabilityService({ query });
 const deliveryTariffs = createDeliveryTariffs({ query, withTransaction, sourceKey: process.env.DELIVERY_TARIFF_DEVICE_KEY || "" });
-const checkout = createCheckoutService({ query, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee, deliveryTariffs });
+const checkout = createCheckoutService({ query, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee, deliveryTariffs, validateLegal:validateLegalAcknowledgement });
 const telegramOrderAlerts = createTelegramOrderAlerts({ query, botToken: process.env.TELEGRAM_BOT_TOKEN });
+const privacy = createPrivacyService({query,phoneVerification,normalizePhone});
 const livePosReports = createLivePosReports({ query, createId: () => randomUUID() });
 
+app.get('/privacy/manage',(_req,res)=>res.redirect(302,'/privacy/manage.html'));
+app.get('/api/legal',(_req,res)=>{res.set('Cache-Control','no-store');res.json(publicLegalConfiguration());});
+app.get('/legal/programs',async(_req,res)=>{try{const programs=await loadLoyaltyPrograms({activeOnly:true});const {rows:products}=await query('SELECT id,name FROM public.products');res.set('Cache-Control','no-store');res.type('html').send(loyaltyProgramsHtml(programs,products));}catch{res.status(503).send('Условия программ временно недоступны. Повторите позже.');}});
+app.get('/legal/:slug',(req,res)=>{const html=legalHtml(req.params.slug);if(!html)return res.sendStatus(404);res.set('Cache-Control','no-store');res.type('html').send(html);});
+// Tokens are sent in Authorization, never in URLs or browser storage.
+const privacyAccessLimits=new Map();
+function privacyAccessAllowed(req){const key=String(req.ip||''),now=Date.now();for(const [k,v] of privacyAccessLimits)if(v.until<=now)privacyAccessLimits.delete(k);if(privacyAccessLimits.size>=10000&&!privacyAccessLimits.has(key))return false;const v=privacyAccessLimits.get(key)||{until:now+600000,count:0};v.count++;privacyAccessLimits.set(key,v);return v.count<=10;}
+const privacyToken=req=>String(req.header('authorization')||'').replace(/^Bearer /,'');
+app.post('/api/privacy/access',async(req,res)=>{if(!privacyAccessAllowed(req))return res.status(429).json({error:'Слишком много попыток. Повторите позже'});try{const r=await privacy.access(req.body?.phone);res.set('Cache-Control','no-store');res.status(r.status||200).json(r);}catch{res.status(503).json({error:'Не удалось начать подтверждение'});}});
+app.get('/api/privacy/session',async(req,res)=>{try{const r=await privacy.status(privacyToken(req));res.set('Cache-Control','no-store');res.status(r.status||200).json(r);}catch{res.status(503).json({error:'Не удалось проверить участие'});}});
+app.post('/api/privacy/withdraw',async(req,res)=>{try{const r=await privacy.withdraw(privacyToken(req));res.set('Cache-Control','no-store');res.status(r.status||200).json(r);}catch{res.status(503).json({error:'Не удалось прекратить участие'});}});
+app.get('/api/device/privacy/tasks',async(req,res)=>{try{const device=await requireDevice(req,res);if(!device)return;const {rows}=await query(`SELECT t.id,t.order_external_id,t.order_id,t.customer_id,t.membership_version,t.task_type FROM public.privacy_pos_tasks t WHERE t.id>$2::bigint AND $1::uuid IS NOT NULL ORDER BY t.id LIMIT 200`,[device.id, /^\d{1,18}$/.test(String(req.query?.after||'0'))?String(req.query?.after||'0'):'0']);res.set('Cache-Control','no-store');res.json({tasks:rows,nextCursor:rows.at(-1)?.id||req.query?.after||'0',hasMore:rows.length===200});}catch{res.status(503).json({error:'Не удалось получить задания очистки'});}});
+app.post('/api/device/privacy/tasks/:id/ack',async(req,res)=>{try{const device=await requireDevice(req,res);if(!device)return;await query(`INSERT INTO public.privacy_pos_task_receipts(device_id,task_id) SELECT $1,id FROM public.privacy_pos_tasks WHERE id=$2 ON CONFLICT DO NOTHING`,[device.id,req.params.id]);res.json({ok:true});}catch{res.status(503).json({error:'Не удалось подтвердить очистку'});}});
+app.post('/api/device/privacy/orders/:id/closed',async(req,res)=>{try{if(!await requireDevice(req,res))return;const {rows}=await query(`UPDATE public.orders SET privacy_closed_at=coalesce(privacy_closed_at,now()) WHERE id=$1::uuid AND status<>'new' RETURNING id`,[req.params.id]);if(!rows.length)return res.status(409).json({error:'Заказ ещё не принят'});res.json({ok:true});}catch{res.status(503).json({error:'Не удалось сохранить завершение заказа'});}});
+app.post('/api/device/privacy/ready',async(req,res)=>{try{const device=await requireDevice(req,res);if(!device)return;await query('INSERT INTO public.privacy_devices(device_id,protocol_version) VALUES($1,1) ON CONFLICT(device_id) DO UPDATE SET protocol_version=1,last_seen_at=now()',[device.id]);res.json({ok:true});}catch{res.status(503).json({error:'Не удалось подтвердить версию устройства'});}});
+app.get('/api/device/privacy/report',async(req,res)=>{try{if(!await requireDevice(req,res))return;res.json(await privacy.retentionReport());}catch{res.status(503).json({error:'Не удалось получить отчёт'});}});
+// Daily application maintenance; destructive order-contact stage remains report-only
+// until the local-copy and backup recovery audit is complete.
+setTimeout(()=>{void privacy.maintain({apply:true}).catch(()=>console.error('Privacy maintenance failed'));},30000);
+const privacyMaintenance=setInterval(()=>{void privacy.maintain({apply:true}).catch(()=>console.error('Privacy maintenance failed'));},24*60*60*1000);privacyMaintenance?.unref?.();
 app.get("/health", (_req, res) => res.json({ ok: true, service: "prilavok-backend" }));
 
 app.get("/api/delivery-tariffs", async (_req, res) => {
@@ -673,6 +696,7 @@ async function loadLoyaltyPrograms({ activeOnly = false } = {}) {
   return rows || [];
 }
 
+async function membershipFor(customerId){const {rows}=await query(`SELECT public.loyalty_membership_active($1::uuid) AS active,version,expires_at FROM public.loyalty_memberships WHERE customer_id=$1::uuid`,[customerId]);return rows?.[0]||{active:false,version:null};}
 async function customerLoyalty(customerId){
   const programs = await loadLoyaltyPrograms({ activeOnly: true });
   const result = [];
@@ -701,7 +725,7 @@ function customerSearchFilter(value) {
 }
 app.get("/api/customers/search",async(req,res)=>{try{if(!await requireDevice(req,res))return;const q=String(req.query.q||"").trim();if(q.length<2)return res.json({customers:[]});const filter=customerSearchFilter(q);const column=filter.column==="normalized_phone"?"normalized_phone":"name";const {rows}=await query(`SELECT id,name,normalized_phone,telegram_user_id,telegram_username,last_purchase_at FROM public.customers WHERE ${column} ILIKE $1 ORDER BY name ASC LIMIT 20`,[filter.pattern]);res.json({customers:rows||[]});}catch(e){console.error("customer search",e);res.status(500).json({error:"Failed to search customers"})}});
 app.post("/api/customers",async(req,res)=>{try{if(!await requireDevice(req,res))return;const name=String(req.body?.name||"").trim(),phone=normalizePhone(req.body?.phone);if(!name||!phone)return res.status(400).json({error:"Name and phone are required"});try{const {rows}=await query(`INSERT INTO public.customers (name,normalized_phone) VALUES ($1,$2) RETURNING id,name,normalized_phone,telegram_user_id,telegram_username,last_purchase_at`,[name,phone]);res.status(201).json({customer:rows[0]});}catch(error){if(error?.code==="23505")return res.status(409).json({error:"Customer already exists"});throw error}}catch(e){console.error("customer create",e);res.status(500).json({error:"Failed to create customer"})}});
-app.get("/api/customers/:id/loyalty",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {rows}=await query(`SELECT id,name,normalized_phone,telegram_user_id,telegram_username,last_purchase_at FROM public.customers WHERE id=$1::uuid LIMIT 1`,[req.params.id]);const customer=rows?.[0];if(!customer)return res.status(404).json({error:"Customer not found"});res.json({customer,programs:await customerLoyalty(customer.id)});}catch(e){console.error("customer loyalty",e);res.status(500).json({error:"Failed to load loyalty"})}});
+app.get("/api/customers/:id/loyalty",async(req,res)=>{try{if(!await requireDevice(req,res))return;const {rows}=await query(`SELECT id,name,normalized_phone,telegram_user_id,telegram_username,last_purchase_at FROM public.customers WHERE id=$1::uuid LIMIT 1`,[req.params.id]);const customer=rows?.[0];if(!customer)return res.status(404).json({error:"Customer not found"});const membership=await membershipFor(customer.id);res.json({customer,membership,programs:membership.active?await customerLoyalty(customer.id):[]});}catch(e){console.error("customer loyalty",e);res.status(500).json({error:"Failed to load loyalty"})}});
 app.get("/api/loyalty/programs",async(req,res)=>{try{if(!await requireDevice(req,res))return;res.json({programs:await loadLoyaltyPrograms()});}catch(e){res.status(500).json({error:"Failed to load programs"})}});
 app.post("/api/loyalty/programs",async(req,res)=>{try{if(!await requireDevice(req,res))return;const name=String(req.body?.name||"").trim(),required=Math.trunc(Number(req.body?.requiredQuantity)),earningIds=[...new Set((req.body?.earningProductIds||[]).map(String))],rewardIds=[...new Set((req.body?.rewardProductIds||[]).map(String))];if(!name||required<1)return res.status(400).json({error:"Invalid loyalty program"});const program=await withTransaction(async client=>{const {rows}=await client.query(`INSERT INTO public.loyalty_programs(name,required_quantity,reward_quantity,is_active) VALUES($1,$2,1,$3) RETURNING *`,[name,required,req.body?.isActive!==false]);const p=rows[0];for(const id of earningIds)await client.query(`INSERT INTO public.loyalty_earning_products(program_id,product_id) VALUES($1::uuid,$2)`,[p.id,id]);for(const id of rewardIds)await client.query(`INSERT INTO public.loyalty_reward_products(program_id,product_id) VALUES($1::uuid,$2)`,[p.id,id]);return p;});res.status(201).json({program});}catch(e){console.error("loyalty program",e);res.status(500).json({error:"Failed to create program"})}});
 app.put("/api/loyalty/programs/:id",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim(),name=String(req.body?.name||"").trim(),required=Math.trunc(Number(req.body?.requiredQuantity)),earningIds=[...new Set((req.body?.earningProductIds||[]).map(String))],rewardIds=[...new Set((req.body?.rewardProductIds||[]).map(String))];if(!id||!name||required<1||!earningIds.length||!rewardIds.length)return res.status(400).json({error:"Invalid loyalty program"});const {rows}=await query(`SELECT (public.replace_loyalty_program($1::uuid,$2,$3,1,$4,$5::text[],$6::text[])).*`,[id,name,required,req.body?.isActive!==false,earningIds,rewardIds]);res.json({program:rows?.[0]||null});}catch(e){console.error("loyalty program update",e);res.status(500).json({error:"Failed to update program"})}});
@@ -715,24 +739,33 @@ app.post("/api/loyalty/sales",async(req,res)=>{
     const orderId=String(req.body?.orderId||"").trim(),customerId=String(req.body?.customerId||"").trim();
     const items=Array.isArray(req.body?.items)?req.body.items:[],redemptions=req.body?.redemptions||{},rewardAllocations=req.body?.rewardAllocations||{};
     if(!orderId||!customerId)return res.status(400).json({error:"Missing loyalty sale identity"});
+    const membership=await membershipFor(customerId);
+    if(!membership.active||String(membership.version)!==String(req.body?.consentVersion)){
+      if(Object.values(redemptions).some(x=>Number(x)>0))return res.status(409).json({error:'Участие в лояльности не подтверждено',code:'LOYALTY_CONSENT_REQUIRED'});
+      return res.json({ok:true,events:[],programs:[],skipped:'consent_required'});
+    }
     const programs=await customerLoyalty(customerId),events=[];
     let allocation;
     try{allocation=validateLoyaltyAllocation({items,programs,redemptions,rewardAllocations})}
     catch(e){return res.status(409).json({error:"Invalid loyalty reward allocation",reason:String(e.message||e)})}
+    await withTransaction(async client=>{
+    const query=client.query.bind(client);
+    await query("SELECT pg_advisory_xact_lock(hashtextextended('privacy:'||$1::text,0))",[customerId]);
     for(const p of programs){
       const earningIds=new Set((p.loyalty_earning_products||[]).map(x=>String(x.product_id)));
       const earned=[...allocation.paidByProduct].filter(([productId])=>earningIds.has(productId)).reduce((sum,[,quantity])=>sum+quantity,0);
       const redeem=allocation.allocatedByProgram.get(String(p.id))||0;
       if(!earned&&!redeem)continue;
       const key=loyaltyIdempotencyKey(orderId,p.id,"sale");
-      let x;try{const {rows}=await query(`SELECT * FROM public.apply_loyalty_sale($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8)`,[customerId,p.id,key,orderId,earned,redeem,p.required_quantity,p.reward_quantity]);x=rows?.[0];}catch(error){if(String(error.message||"").includes("INSUFFICIENT_LOYALTY_REWARDS"))return res.status(409).json({error:"Insufficient loyalty rewards",programId:p.id});throw error}
+      const {rows}=await query(`SELECT * FROM public.apply_loyalty_sale($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9::bigint,$10::timestamptz)`,[customerId,p.id,key,orderId,earned,redeem,p.required_quantity,p.reward_quantity,membership.version,req.body?.occurredAt||null]);const x=rows?.[0];
       events.push({programId:p.id,earned,redeemed:Number(x?.redeemed||0),granted:Number(x?.granted||0),progress:Number(x?.progress||0),rewards:Number(x?.rewards||0),duplicate:Boolean(x?.duplicate)});
     }
     await query(`UPDATE public.customers SET last_purchase_at=now(),updated_at=now() WHERE id=$1::uuid`,[customerId]);
+    });
     const finalPrograms=await customerLoyalty(customerId);
     const {rows:customerRows}=await query(`SELECT telegram_user_id FROM public.customers WHERE id=$1::uuid LIMIT 1`,[customerId]);const customer=customerRows?.[0];
     res.json({ok:true,events,programs:finalPrograms,telegramUserId:customer?.telegram_user_id||null,loyaltyMessage:formatLoyaltySaleMessage(events,finalPrograms)});
-  }catch(e){console.error("loyalty sale",e);res.status(500).json({error:"Failed to apply loyalty"})}
+  }catch(e){for(const code of ["LOYALTY_CONSENT_REQUIRED","LOYALTY_EVENT_TIME_INVALID","INSUFFICIENT_LOYALTY_REWARDS"]){if(String(e.message||"").includes(code))return res.status(409).json({error:"Операция лояльности отклонена: обновите данные клиента",code});}console.error("loyalty sale",e);res.status(500).json({error:"Failed to apply loyalty"})}
 });
 
 app.post("/api/loyalty/reversal",async(req,res)=>{
@@ -755,8 +788,9 @@ app.post("/api/customers/:id/loyalty-adjustment",async(req,res)=>{
     const programId=String(req.body?.programId||"").trim(),reason=String(req.body?.reason||"").trim(),adminEmployeeId=String(req.body?.adminEmployeeId||"").trim(),adminEmployeeName=String(req.body?.adminEmployeeName||"").trim(),adminPassword=String(req.body?.adminPassword||""),progressDelta=Math.trunc(Number(req.body?.progressDelta)||0),rewardDelta=Math.trunc(Number(req.body?.rewardDelta)||0);
     if(!process.env.POS_ADMIN_PASSWORD||adminPassword!==process.env.POS_ADMIN_PASSWORD)return res.status(403).json({error:"Administrator authorization required"});
     if(!programId||!reason||!adminEmployeeId||!adminEmployeeName||(!progressDelta&&!rewardDelta))return res.status(400).json({error:"Program, reason, administrator and adjustment are required"});
+    if(!(await membershipFor(req.params.id)).active)return res.status(409).json({error:'Участие в лояльности не подтверждено',code:'LOYALTY_CONSENT_REQUIRED'});
     const key=`manual:${req.params.id}:${programId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-    try{await query(`SELECT * FROM public.apply_single_reward_adjustment($1::uuid,$2::uuid,$3,$4,$5,$6::jsonb)`,[req.params.id,programId,progressDelta,rewardDelta,key,JSON.stringify({reason,adminEmployeeId,adminEmployeeName})]);}catch(error){if(String(error.message||"").includes("INVALID_SINGLE_REWARD_BALANCE"))return res.status(409).json({error:"Loyalty balance must contain at most one reward and no progress while it is available"});throw error}
+    try{await query(`SELECT * FROM public.apply_single_reward_adjustment($1::uuid,$2::uuid,$3,$4,$5,$6::jsonb)`,[req.params.id,programId,progressDelta,rewardDelta,key,JSON.stringify({reason,adminEmployeeId,adminEmployeeName})]);}catch(error){if(String(error.message||"").includes("LOYALTY_CONSENT_REQUIRED"))return res.status(409).json({error:"Участие прекращено",code:"LOYALTY_CONSENT_REQUIRED"});if(String(error.message||"").includes("INVALID_SINGLE_REWARD_BALANCE"))return res.status(409).json({error:"Loyalty balance must contain at most one reward and no progress while it is available"});throw error}
     res.json({ok:true,programs:await customerLoyalty(req.params.id)});
   }catch(e){console.error("loyalty adjustment",e);res.status(500).json({error:"Failed to adjust loyalty"})}
 });
@@ -764,42 +798,8 @@ app.post("/api/customers/:id/loyalty-adjustment",async(req,res)=>{
 app.get("/api/config", (_req, res) => res.json({ deliveryFee: Number.isFinite(deliveryFee) ? deliveryFee : 0,orderingOpen:orderingOpenNow(),orderHours:null }));
 
 app.post("/api/orders", async (req, res) => {
-  try {
-    const orderType = String(req.body?.orderType || "Самовывоз").trim();
-    const customerName = String(req.body?.customerName || "").trim();
-    const rawPhone = String(req.body?.phone || "").trim();
-    const phone = normalizePhone(rawPhone);
-    const verificationToken = String(req.body?.verificationToken || "").trim();
-    const address = String(req.body?.address || "").trim();
-    const comment = String(req.body?.comment || "").trim();
-    const requestedItems = Array.isArray(req.body?.items) ? req.body.items : [];
-    if (!customerName || !phone || !requestedItems.length) return res.status(400).json({ error: "Заполните данные заказа и добавьте товары" });
-    if (orderType === "Доставка" && !address) return res.status(400).json({ error: "Укажите адрес доставки" });
-    const contactError = validateOrderContact({ customerName, phone: rawPhone, address, comment, items: requestedItems });
-    if (contactError) return res.status(400).json({ error: contactError });
-    if (!verificationToken) return res.status(403).json({ error: "Подтвердите номер телефона через Telegram" });
+  return res.status(410).json({error:"Используйте актуальную форму оформления заказа",code:"USE_CHECKOUT"});
 
-    const verification = await phoneVerification.get(verificationToken);
-    if (!verification || verification.status !== "VERIFIED" || verification.phone !== phone) return res.status(403).json({ error: "Номер телефона не подтверждён" });
-
-    const ids = requestedItems.map(x => String(x.productId || "").trim()).filter(Boolean); const uniqueIds = [...new Set(ids)];
-    if (!uniqueIds.length || uniqueIds.length !== ids.length) return res.status(400).json({ error: "Некорректные товары в заказе" });
-    const { rows: products } = await query(`SELECT id,external_id,name,price FROM public.products WHERE id=ANY($1::uuid[]) AND is_active=TRUE AND available_online=TRUE`,[uniqueIds]);
-    const productMap = new Map((products || []).map(p => [p.id, p]));
-    if (productMap.size !== uniqueIds.length) return res.status(400).json({ error: "Один из товаров больше недоступен для заказа" });
-    const items = []; let subtotal = 0;
-    for (const raw of requestedItems) { const product = productMap.get(String(raw.productId)); const quantity = Number(raw.quantity); if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 99) return res.status(400).json({ error: "Некорректное количество товара" }); subtotal += Number(product.price || 0) * quantity; items.push({ product_id: product.id, external_product_id: product.external_id, product_name: product.name, price: Number(product.price || 0), quantity, comment: raw.comment ? String(raw.comment).trim().slice(0, 500) : null }); }
-
-    const consumed = await phoneVerification.consume(verificationToken, phone);
-    if (!consumed) return res.status(409).json({ error: "Подтверждение уже использовано. Подтвердите номер ещё раз" });
-
-    const fee = orderType === "Доставка" ? (Number.isFinite(deliveryFee) ? deliveryFee : 0) : 0; const total = subtotal + fee;
-    const externalId = `WEB-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`; const trackingToken = randomUUID().replace(/-/g, "");
-    const { rows: orderRows } = await query(`SELECT (public.create_web_order($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)).*`,[externalId,trackingToken,orderType,customerName,phone,orderType==="Доставка"?address:null,comment||null,total,fee,JSON.stringify(items)]);
-    const created=orderRows?.[0];
-    if(!created?.id)throw new Error("Atomic order creation returned no order");
-    res.status(201).json({ ok: true, orderId: created.id, externalId, trackingToken, total, deliveryFee: fee });
-  } catch (error) { const message=String(error?.message||"");console.error("POST /api/orders:", error);if(message.includes("OUT_OF_STOCK"))return res.status(409).json({error:"Товар закончился или его осталось недостаточно"});if(message.includes("AVAILABILITY_UNAVAILABLE"))return res.status(409).json({error:"Актуальные остатки временно недоступны"});res.status(500).json({ error: "Не удалось создать заказ" }); }
 });
 
 app.get("/api/orders/:token",async(req,res)=>{try{const token=String(req.params.token||"").trim();if(!token)return res.status(400).json({error:"Missing token"});const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.customer_name,o.phone,o.address,o.comment,o.total,o.delivery_fee,o.delivery_tariff_id,o.delivery_tariff_name,o.delivery_tariff_version,o.created_at,o.updated_at,COALESCE((SELECT jsonb_agg(jsonb_build_object('product_name',i.product_name,'price',i.price,'quantity',i.quantity,'comment',i.comment) ORDER BY i.created_at,i.id) FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS order_items FROM public.orders o WHERE o.tracking_token=$1 LIMIT 1`,[token]);const order=rows?.[0];if(!order)return res.status(404).json({error:"Заказ не найден"});res.json({order});}catch(error){console.error("GET /api/orders/:token:",error);res.status(500).json({error:"Не удалось загрузить заказ"})}});

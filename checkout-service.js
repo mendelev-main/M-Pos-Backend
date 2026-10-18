@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 export const CHECKOUT_TTL_MS = 5 * 60 * 1000;
 
-export function createCheckoutService({ query, normalizePhone, validateOrderContact, phoneVerification, availability = null, deliveryFee = 0, deliveryTariffs = null }) {
+export function createCheckoutService({ query, normalizePhone, validateOrderContact, phoneVerification, availability = null, deliveryFee = 0, deliveryTariffs = null, validateLegal = null }) {
   const hash = value => createHash("sha256").update(String(value)).digest("hex");
 
   async function prepareOrder(payload) {
@@ -26,9 +26,11 @@ export function createCheckoutService({ query, normalizePhone, validateOrderCont
   }
 
   async function create(payload) {
+    if(validateLegal){const invalid=validateLegal(payload);if(invalid)return invalid;}
     const prepared=await prepareOrder(payload);if(prepared.error)return prepared;
     const checkoutToken=randomBytes(32).toString("base64url"),expiresAt=new Date(Date.now()+CHECKOUT_TTL_MS).toISOString(),verification=await phoneVerification.create(prepared.order.phone);
     if(verification.error)return verification;
+    if(validateLegal){prepared.order.legal={version:payload.legal.version,acknowledged:true};prepared.order.loyaltyOptIn=payload.loyaltyOptIn===true;}
     await query(`INSERT INTO public.checkout_sessions (token_hash,phone,status,order_payload,verification_token_hash,expires_at) VALUES ($1,$2,'PENDING',$3::jsonb,$4,$5::timestamptz)`,[hash(checkoutToken),prepared.order.phone,JSON.stringify(prepared.order),hash(verification.token),expiresAt]);
     return {checkoutToken,status:"PENDING",expiresAt,telegramUrl:verification.telegramUrl,deliveryTariff:prepared.order.deliveryTariff,deliveryFee:prepared.order.fee,total:prepared.order.total};
   }
@@ -47,6 +49,7 @@ export function createCheckoutService({ query, normalizePhone, validateOrderCont
       return rows?.[0]?.result||null;
     } catch(error) {
       const message=String(error.message||"");
+      if(message.includes("LEGAL_VERSION_REQUIRED"))return {ok:false,reason:"LEGAL_VERSION_REQUIRED"};
       if(message.includes("CHECKOUT_EXPIRED"))return {ok:false,reason:"EXPIRED"};
       if(message.includes("VERIFICATION_NOT_READY"))return {ok:false,reason:"NOT_VERIFIED"};
       if(message.includes("OUT_OF_STOCK"))return {ok:false,reason:"OUT_OF_STOCK"};
