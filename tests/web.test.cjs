@@ -107,14 +107,14 @@ test('menu endpoint removes products whose category is hidden on the requested s
  assert.deepEqual(response.body.products.map(product=>product.id),['shown']);assert.deepEqual(response.body.categories.map(category=>category.id),['visible']);
 });
 
- test('open ordering tab stays available past 22:30 without navigation',()=>{
+ test('open ordering tab disables checkout at 22:00 without navigation',()=>{
  const c=fixture();let reloaded=false;
  c.location.reload=()=>{reloaded=true};
- c.Date=class extends Date{constructor(){super('2026-10-03T19:29:59Z')}};
+ c.Date=class extends Date{constructor(){super('2026-10-03T18:59:59Z')}};
  assert.equal(c.orderingOpenNow(),true);
- c.Date=class extends Date{constructor(){super('2026-10-03T19:30:00Z')}};
- assert.equal(c.orderingOpenNow(),true);
- c.applyOrderingState();assert.equal(reloaded,false);assert.equal(c.document.getElementById('submitBtn').disabled,false);
+ c.Date=class extends Date{constructor(){super('2026-10-03T19:00:00Z')}};
+ assert.equal(c.orderingOpenNow(),false);
+ c.applyOrderingState();assert.equal(reloaded,false);assert.equal(c.document.getElementById('submitBtn').disabled,true);
 });
 
 test('invalid checkout fields are highlighted without native validation bubbles or toast',async()=>{

@@ -20,3 +20,5 @@ Old customer profiles without verified membership are frozen for loyalty, with t
 Backend Node tests include actual native migrations 001–005 under `mpos_app` using PostgreSQL WASM, strict choices before contacts are stored, verified enrollment, idempotence, stale checkouts, versions, expiry, refund after withdrawal, bounded cleanup, contact removal preserving totals/items, and private function denial. GitHub Actions additionally tests Flyway on PostgreSQL 17 and an isolated VDS fixture with backup/restore/setup. Shared POS and Android suites run in Actions; no local JS/JVM test, lint or APK assembly was run for Android.
 
 Physical acceptance remains required on the tablet: update over existing installation, verified opt-in, ordinary no-opt-in order, reward use, withdrawal, reconnect, and restore a pre-withdrawal backup. External file retention is an operator procedure, not an APK feature.
+
+Checkout is open daily 10:00–22:00 Europe/Minsk, including on already-open browser tabs; the API enforces the same boundary. Menu and privacy withdrawal remain available around the clock. A pre-22:00 checkout cannot be finalized after closing.

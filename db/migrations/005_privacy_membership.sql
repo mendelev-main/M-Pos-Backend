@@ -223,6 +223,16 @@ BEGIN
     INSERT INTO public.privacy_pos_tasks(order_external_id,order_id,task_type) VALUES(o.external_id,o.id,'redact_order');
    END LOOP;
   END IF;
+  -- Order-only profiles are not loyalty enrollment. Once every operational order
+  -- has been redacted, remove their otherwise orphaned contact record as well.
+  FOR c IN SELECT x.id AS customer_id FROM public.customers x WHERE x.privacy_retired_at IS NULL AND x.updated_at<now()-interval '30 days'
+   AND NOT EXISTS(SELECT 1 FROM public.loyalty_memberships m WHERE m.customer_id=x.id)
+   AND NOT EXISTS(SELECT 1 FROM public.loyalty_ledger l WHERE l.customer_id=x.id)
+   AND NOT EXISTS(SELECT 1 FROM public.orders order_row WHERE order_row.customer_id=x.id)
+   ORDER BY x.updated_at LIMIT 500 FOR UPDATE SKIP LOCKED LOOP
+   UPDATE public.customers SET name='Удалённый клиент',normalized_phone='retired:'||id::text,telegram_user_id=NULL,telegram_username=NULL,last_purchase_at=NULL,privacy_retired_at=now(),updated_at=now() WHERE id=c.customer_id;
+   INSERT INTO public.privacy_pos_tasks(customer_id,task_type) VALUES(c.customer_id,'redact_customer');
+  END LOOP;
  END IF;
  UPDATE public.privacy_retention_state SET last_run_at=now(),last_report=report||jsonb_build_object('applied',p_apply) WHERE id=true;
  RETURN report||jsonb_build_object('applied',p_apply);

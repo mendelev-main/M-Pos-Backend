@@ -1,7 +1,7 @@
 export const VENUE_TIME_ZONE=process.env.VENUE_TIME_ZONE||"Europe/Minsk";
 export const SITE_WAKE_MINUTE=6*60;
 export const ORDER_OPEN_MINUTE=10*60;
-export const ORDER_CLOSE_MINUTE=22*60+30;
+export const ORDER_CLOSE_MINUTE=22*60;
 
 export function venueMinute(date=new Date(),timeZone=VENUE_TIME_ZONE){
   const parts=new Intl.DateTimeFormat("en-GB",{timeZone,hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(date);
@@ -9,9 +9,9 @@ export function venueMinute(date=new Date(),timeZone=VENUE_TIME_ZONE){
   return Number(values.hour)*60+Number(values.minute);
 }
 
-// The VDS backend, menu, checkout and background workers are available 24/7.
+// The backend, menu and background workers stay available around the clock.
 export function isSiteSleepWindow(){return false}
-export function isOrderingOpen(){return true}
+export function isOrderingOpen(date=new Date(),timeZone=VENUE_TIME_ZONE){const minute=venueMinute(date,timeZone);return minute>=ORDER_OPEN_MINUTE&&minute<ORDER_CLOSE_MINUTE}
 export function millisecondsUntilSiteWake(date=new Date(),timeZone=VENUE_TIME_ZONE){return Math.max(60_000,(SITE_WAKE_MINUTE-venueMinute(date,timeZone))*60_000)}
 
 export function closedPageHtml({ordering=false,date=new Date()}={}){

@@ -5,11 +5,8 @@ import { closedPageHtml, isOrderingOpen, isSiteSleepWindow, millisecondsUntilSit
 const zone="Europe/Minsk";
 const at=iso=>new Date(iso);
 
-test("site and ordering remain available across the former closing boundaries",()=>{
-  for(const iso of ["2026-10-02T21:00:00Z","2026-10-03T02:59:00Z","2026-10-03T03:00:00Z","2026-10-03T06:59:00Z","2026-10-03T07:00:00Z","2026-10-03T19:29:59Z","2026-10-03T19:30:00Z"]){
-    assert.equal(isSiteSleepWindow(at(iso),zone),false);
-    assert.equal(isOrderingOpen(at(iso),zone),true);
-  }
+test("menu stays open while checkout accepts orders only from 10:00 inclusive to 22:00 exclusive Minsk",()=>{
+ for(const [iso,open] of [["2026-10-03T06:59:59Z",false],["2026-10-03T07:00:00Z",true],["2026-10-03T18:59:59Z",true],["2026-10-03T19:00:00Z",false],["2026-10-03T21:00:00Z",false]]){assert.equal(isSiteSleepWindow(at(iso),zone),false);assert.equal(isOrderingOpen(at(iso),zone),open);}
 });
 
 test("overnight page shows the venue message and working hours",()=>{

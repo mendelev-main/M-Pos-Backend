@@ -105,7 +105,7 @@ app.put("/api/device/delivery-tariffs", async (req, res) => {
 
 app.post("/api/checkout", async (req, res) => {
   try {
-    if(!orderingOpenNow())return res.status(503).json({error:"Онлайн-заказы принимаются с 10:00 до 22:30",opensAt:"10:00",closesAt:"22:30",timeZone:VENUE_TIME_ZONE});
+    if(!orderingOpenNow())return res.status(503).json({error:"Онлайн-заказы принимаются с 10:00 до 22:00",opensAt:"10:00",closesAt:"22:00",timeZone:VENUE_TIME_ZONE});
     const result = await checkout.create(req.body);
     if (result.error) return res.status(result.status || 400).json({ error: result.error, code: result.code, fieldErrors: globalThis.OrderValidation.validateFields(req.body || {}) });
     return res.status(201).json(result);
@@ -164,6 +164,11 @@ app.post("/api/phone-verification/:token/confirm", async (req, res) => {
       return res.status(409).json(result);
     }
 
+    // Privacy withdrawal verification remains available at any hour.
+    if(!orderingOpenNow()){
+      const {rows}=await query('SELECT EXISTS(SELECT 1 FROM public.checkout_sessions WHERE verification_token_hash=$1) AS checkout',[createHash('sha256').update(String(req.params.token)).digest('hex')]);
+      if(rows?.[0]?.checkout)return res.status(409).json({ok:false,reason:'ORDERING_CLOSED',error:'Онлайн-заказы принимаются с 10:00 до 22:00 по времени Беларуси. Оформите заказ в часы работы.'});
+    }
     const finalized = await checkout.finalizeByVerificationToken(req.params.token);
     if (finalized && !finalized.ok) {
       console.warn("Phone verification rejected", { stage: "finalization", status: 409, reason: finalized.reason });
@@ -795,7 +800,7 @@ app.post("/api/customers/:id/loyalty-adjustment",async(req,res)=>{
   }catch(e){console.error("loyalty adjustment",e);res.status(500).json({error:"Failed to adjust loyalty"})}
 });
 
-app.get("/api/config", (_req, res) => res.json({ deliveryFee: Number.isFinite(deliveryFee) ? deliveryFee : 0,orderingOpen:orderingOpenNow(),orderHours:null }));
+app.get("/api/config", (_req, res) => res.json({ deliveryFee: Number.isFinite(deliveryFee) ? deliveryFee : 0,orderingOpen:orderingOpenNow(),orderHours:{opensAt:"10:00",closesAt:"22:00",timeZone:VENUE_TIME_ZONE} }));
 
 app.post("/api/orders", async (req, res) => {
   return res.status(410).json({error:"Используйте актуальную форму оформления заказа",code:"USE_CHECKOUT"});
