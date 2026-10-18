@@ -25,13 +25,6 @@ app.use(cors());
 app.use("/api/owner/report", express.json({ limit: "14mb" }));
 app.use(express.json({ limit: "2mb" }));
 app.use((req,res,next)=>{
-  if(req.method==="GET"&&req.path==="/"&&!isSiteSleepWindow()&&!isOrderingOpen()){
-    res.setHeader("Cache-Control","no-store");
-    return res.type("html").send(closedPageHtml({ordering:true}));
-  }
-  next();
-});
-app.use((req,res,next)=>{
   if(!isSiteSleepWindow())return next();
   const retrySeconds=Math.ceil(millisecondsUntilSiteWake()/1000),path=String(req.path||"");
   if(req.method==="GET"&&(path==="/"||path==="/menu"||path==="/menu/")){res.setHeader("Cache-Control","no-store");res.setHeader("Retry-After",String(retrySeconds));return res.status(503).type("html").send(closedPageHtml())}
