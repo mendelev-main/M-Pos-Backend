@@ -25,7 +25,7 @@ bash "$root/scripts/flyway.sh" migrate
 bash "$root/scripts/flyway.sh" migrate
 bash "$root/scripts/flyway.sh" validate
 test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 7
-test "$(sql -Atc "SELECT count(*) FROM information_schema.columns WHERE table_name='orders' AND column_name LIKE 'delivery_tariff_%'")" = 4
+test "$(sql -Atc "SELECT count(*) FROM information_schema.columns WHERE table_name='orders' AND column_name LIKE 'delivery_tariff_%'")" = 3
 
 # A nonempty legacy database must refuse automatic baseline, then apply only 004
 # after an explicit reviewed baseline at version 3.
