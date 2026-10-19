@@ -1,3 +1,4 @@
+import { createPosLoyaltyConsent, posLoyaltyTerms } from './pos-loyalty-consent.js';
 import { createPrivacyService, validateLegalAcknowledgement, publicLegalConfiguration } from "./privacy-service.js";
 import { legalHtml, loyaltyProgramsHtml } from "./legal-documents.js";
 import express from "express";
@@ -693,6 +694,9 @@ async function loadLoyaltyPrograms({ activeOnly = false } = {}) {
   );
   return rows || [];
 }
+
+app.get('/api/device/loyalty/terms',async(req,res)=>{if(!await requireDevice(req,res))return;res.set('Cache-Control','no-store');res.json(posLoyaltyTerms());});
+app.post('/api/customers/:id/loyalty/consent',async(req,res)=>{try{const device=await requireDevice(req,res);if(!device)return;const result=await createPosLoyaltyConsent({withTransaction})({customerId:req.params.id,deviceId:device.id,payload:req.body});res.status(result.status||200).json(result);}catch(e){res.status(503).json({error:'Не удалось сохранить согласие. Повторите подтверждение'});}});
 
 async function membershipFor(customerId){const {rows}=await query(`SELECT public.loyalty_membership_active($1::uuid) AS active,version,expires_at FROM public.loyalty_memberships WHERE customer_id=$1::uuid`,[customerId]);return rows?.[0]||{active:false,version:null};}
 async function customerLoyalty(customerId){
