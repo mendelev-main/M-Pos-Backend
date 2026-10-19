@@ -1,3 +1,4 @@
+import { createLoyaltyBalanceAdjustment } from './loyalty-adjustment.js';
 import { createPosLoyaltyConsent, posLoyaltyTerms } from './pos-loyalty-consent.js';
 import { createPrivacyService, validateLegalAcknowledgement, publicLegalConfiguration } from "./privacy-service.js";
 import { legalHtml, loyaltyProgramsHtml } from "./legal-documents.js";
@@ -698,7 +699,7 @@ async function loadLoyaltyPrograms({ activeOnly = false } = {}) {
 app.get('/api/device/loyalty/terms',async(req,res)=>{if(!await requireDevice(req,res))return;res.set('Cache-Control','no-store');res.json(posLoyaltyTerms());});
 app.post('/api/customers/:id/loyalty/consent',async(req,res)=>{try{const device=await requireDevice(req,res);if(!device)return;const result=await createPosLoyaltyConsent({withTransaction})({customerId:req.params.id,deviceId:device.id,payload:req.body});res.status(result.status||200).json(result);}catch(e){res.status(503).json({error:'Не удалось сохранить согласие. Повторите подтверждение'});}});
 
-async function membershipFor(customerId){const {rows}=await query(`SELECT public.loyalty_membership_active($1::uuid) AS active,version,expires_at FROM public.loyalty_memberships WHERE customer_id=$1::uuid`,[customerId]);return rows?.[0]||{active:false,version:null};}
+async function membershipFor(customerId){const {rows}=await query(`SELECT public.loyalty_membership_active($1::uuid) AS active,version,expires_at,consented_at FROM public.loyalty_memberships WHERE customer_id=$1::uuid`,[customerId]);return rows?.[0]||{active:false,version:null};}
 async function customerLoyalty(customerId){
   const programs = await loadLoyaltyPrograms({ activeOnly: true });
   const result = [];
@@ -789,7 +790,8 @@ app.post("/api/customers/:id/loyalty-adjustment",async(req,res)=>{
     if(!await requireDevice(req,res))return;
     const programId=String(req.body?.programId||"").trim(),reason=String(req.body?.reason||"").trim(),adminEmployeeId=String(req.body?.adminEmployeeId||"").trim(),adminEmployeeName=String(req.body?.adminEmployeeName||"").trim(),adminPassword=String(req.body?.adminPassword||""),progressDelta=Math.trunc(Number(req.body?.progressDelta)||0),rewardDelta=Math.trunc(Number(req.body?.rewardDelta)||0);
     if(!process.env.POS_ADMIN_PASSWORD||adminPassword!==process.env.POS_ADMIN_PASSWORD)return res.status(403).json({error:"Administrator authorization required"});
-    if(!programId||!reason||!adminEmployeeId||!adminEmployeeName||(!progressDelta&&!rewardDelta))return res.status(400).json({error:"Program, reason, administrator and adjustment are required"});
+    if(!programId||!reason||!adminEmployeeId||!adminEmployeeName||(!req.body?.targetBalance&&!progressDelta&&!rewardDelta))return res.status(400).json({error:"Program, reason, administrator and adjustment are required"});
+    if(req.body?.targetBalance){const result=await createLoyaltyBalanceAdjustment({withTransaction})(req.params.id,{...req.body,programId,reason,adminEmployeeId,adminEmployeeName});return res.status(result.status||200).json(result);}
     if(!(await membershipFor(req.params.id)).active)return res.status(409).json({error:'Участие в лояльности не подтверждено',code:'LOYALTY_CONSENT_REQUIRED'});
     const key=`manual:${req.params.id}:${programId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
     try{await query(`SELECT * FROM public.apply_single_reward_adjustment($1::uuid,$2::uuid,$3,$4,$5,$6::jsonb)`,[req.params.id,programId,progressDelta,rewardDelta,key,JSON.stringify({reason,adminEmployeeId,adminEmployeeName})]);}catch(error){if(String(error.message||"").includes("LOYALTY_CONSENT_REQUIRED"))return res.status(409).json({error:"Участие прекращено",code:"LOYALTY_CONSENT_REQUIRED"});if(String(error.message||"").includes("INVALID_SINGLE_REWARD_BALANCE"))return res.status(409).json({error:"Loyalty balance must contain at most one reward and no progress while it is available"});throw error}

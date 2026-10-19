@@ -110,3 +110,23 @@ test('cashier consent needs no Telegram, stores evidence, earns two pizzas once 
   const rejoined=await call({...payload,expectedVersion:version,requestId:'new-personal-consent'});assert.equal(rejoined.membership.active,true);assert.ok(Number(rejoined.membership.version)>Number(version));
  }finally{await f.db.close()}
 });
+
+test('absolute progress correction rejects a stale balance and replays a saved request without changing it twice',async()=>{
+ const {createLoyaltyBalanceAdjustment}=await import('../loyalty-adjustment.js');const f=await fixture();try{
+  const cid=(await f.query("insert into customers(name,normalized_phone) values('UI fixture','+375290000009') returning id")).rows[0].id;
+  await f.query("insert into loyalty_memberships(customer_id,status,consented_at,expires_at,document_version) values($1,'active',now(),now()+interval '24 months',$2)",[cid,LEGAL_VERSION]);
+  const pid=(await f.query("insert into loyalty_programs(name,required_quantity) values('UI pizza',5) returning id")).rows[0].id;
+  await f.query("select * from apply_single_reward_adjustment($1,$2,2,0,'seed-ui','{}')",[cid,pid]);
+  const adjust=createLoyaltyBalanceAdjustment({withTransaction:async fn=>{await f.query('begin');try{const r=await fn({query:f.query});await f.query('commit');return r}catch(e){await f.query('rollback');throw e}}});
+  const payload={programId:pid,requestId:'ui-adjust-fixture-1',consentVersion:1,expectedBalance:{progress:2,rewards:0},targetBalance:{progress:3,rewards:0},reason:'Fixture correction',adminEmployeeId:'fixture-admin',adminEmployeeName:'Fixture admin'};
+  assert.equal((await adjust(cid,payload)).ok,true);assert.equal((await adjust(cid,payload)).duplicate,true);
+  assert.deepEqual((await f.query('select * from loyalty_balance($1,$2)',[cid,pid])).rows[0],{progress:3,rewards:0});
+  assert.equal((await adjust(cid,{...payload,requestId:'stale-adjustment-2'})).code,'LOYALTY_BALANCE_CHANGED');
+  assert.equal((await adjust(cid,{...payload,requestId:'new-gift-adjustment',expectedBalance:{progress:3,rewards:0},targetBalance:{progress:0,rewards:1}})).ok,true);
+  assert.deepEqual((await f.query('select * from loyalty_balance($1,$2)',[cid,pid])).rows[0],{progress:0,rewards:1});
+  assert.equal((await adjust(cid,{...payload,requestId:'invalid-balance',expectedBalance:{progress:0,rewards:1},targetBalance:{progress:1,rewards:1}})).status,400);
+  assert.equal((await adjust(cid,{...payload,requestId:'remove-gift-request',expectedBalance:{progress:0,rewards:1},targetBalance:{progress:0,rewards:0}})).ok,true);
+  await f.query("update loyalty_memberships set status='withdrawn',version=2 where customer_id=$1",[cid]);
+  assert.equal((await adjust(cid,{...payload,requestId:'withdrawn-adjustment',expectedBalance:{progress:0,rewards:0}})).code,'LOYALTY_CONSENT_REQUIRED');
+ }finally{await f.db.close()}
+});
