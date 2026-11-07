@@ -18,5 +18,5 @@ test("atomic sale keeps semantic ledger events and reversal keys per source even
 
 test("loyalty analytics use central customer orders and semantic ledger",()=>{assert.match(server,/\/api\/analytics\/loyalty/);assert.match(server,/averageCustomerCheck/);assert.match(server,/activeLoyaltyUsers/);assert.match(server,/rewardsGranted/);assert.match(server,/rewardsRedeemed/);});
 
-test("manual loyalty adjustment requires server-side administrator authorization",()=>{assert.match(server,/POS_ADMIN_PASSWORD/);assert.match(server,/Administrator authorization required/);assert.match(server,/adminPassword/);});
+test("manual loyalty adjustment requires server-side administrator authorization",()=>{assert.match(server,/verifyPosAdministrationPassword/);assert.match(server,/Administrator authorization required/);assert.match(server,/adminPassword/);});
 test("program API and atomic adjustment enforce one active reward",()=>{assert.match(server,/VALUES\(\$1,\$2,1,\$3\)/);assert.match(singleReward,/next_rewards < 0 or next_rewards > 1/);assert.match(singleReward,/next_rewards = 1 and next_progress <> 0/);assert.match(server,/formatLoyaltySaleMessage\(events,finalPrograms\)/);});

@@ -1,3 +1,4 @@
+import { verifyPosAdministrationPassword } from './pos-administration-auth.js';
 import { createLoyaltyBalanceAdjustment } from './loyalty-adjustment.js';
 import { createPosLoyaltyConsent, posLoyaltyTerms } from './pos-loyalty-consent.js';
 import { createPrivacyService, validateLegalAcknowledgement, publicLegalConfiguration } from "./privacy-service.js";
@@ -789,7 +790,7 @@ app.post("/api/customers/:id/loyalty-adjustment",async(req,res)=>{
   try{
     if(!await requireDevice(req,res))return;
     const programId=String(req.body?.programId||"").trim(),reason=String(req.body?.reason||"").trim(),adminEmployeeId=String(req.body?.adminEmployeeId||"").trim(),adminEmployeeName=String(req.body?.adminEmployeeName||"").trim(),adminPassword=String(req.body?.adminPassword||""),progressDelta=Math.trunc(Number(req.body?.progressDelta)||0),rewardDelta=Math.trunc(Number(req.body?.rewardDelta)||0);
-    if(!process.env.POS_ADMIN_PASSWORD||adminPassword!==process.env.POS_ADMIN_PASSWORD)return res.status(403).json({error:"Administrator authorization required"});
+    if(!verifyPosAdministrationPassword(adminPassword,req.body?.adminCredentialVersion))return res.status(403).json({error:"Administrator authorization required"});
     if(!programId||!reason||!adminEmployeeId||!adminEmployeeName||(!req.body?.targetBalance&&!progressDelta&&!rewardDelta))return res.status(400).json({error:"Program, reason, administrator and adjustment are required"});
     if(req.body?.targetBalance){const result=await createLoyaltyBalanceAdjustment({withTransaction})(req.params.id,{...req.body,programId,reason,adminEmployeeId,adminEmployeeName});return res.status(result.status||200).json(result);}
     if(!(await membershipFor(req.params.id)).active)return res.status(409).json({error:'Участие в лояльности не подтверждено',code:'LOYALTY_CONSENT_REQUIRED'});
