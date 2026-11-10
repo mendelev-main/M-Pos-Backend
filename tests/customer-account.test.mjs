@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
@@ -14,11 +14,11 @@ test('account login binds browser proof to verified contact, expires/revokes ses
   try {
     await db.exec('CREATE ROLE mpos_app;');
     const database = (await db.query('SELECT current_database() AS name')).rows[0].name;
-    const sql = (await readFile(new URL('../db/migrations/001_baseline.sql', import.meta.url), 'utf8'))
-      .replace('GRANT CONNECT ON DATABASE mpos TO mpos_app;', `GRANT CONNECT ON DATABASE "${database}" TO mpos_app;`);
-    await db.exec(sql);
-    await db.exec(await readFile(new URL('../db/migrations/009_customer_account.sql', import.meta.url), 'utf8'));
-    await db.exec(await readFile(new URL('../db/migrations/010_account_phone_from_telegram.sql', import.meta.url), 'utf8'));
+    const migrations = new URL('../db/migrations/', import.meta.url);
+    for (const file of (await readdir(migrations)).filter(name => /^\d{3}_.+\.sql$/.test(name)).sort()) {
+      const sql = (await readFile(new URL(file, migrations), 'utf8')).replace('GRANT CONNECT ON DATABASE mpos TO mpos_app;', `GRANT CONNECT ON DATABASE "${database}" TO mpos_app;`);
+      await db.exec(sql);
+    }
     await db.exec('SET ROLE mpos_app;');
     const query = db.query.bind(db);
     const withTransaction = async fn => {
@@ -77,7 +77,7 @@ test('account login binds browser proof to verified contact, expires/revokes ses
 
 test('account routes enforce same origin and set HttpOnly 90-day cookie without exposing token in JSON', async () => {
   const routes = {}, middlewares = [];
-  const app = { use(path, fn) { middlewares.push(fn); }, get(path, fn) { routes[path] = fn; }, post(path, fn) { routes[path] = fn; } };
+  const app = { use(path, fn) { middlewares.push(fn); }, get(path, fn) { routes[path] = fn; }, post(path, fn) { routes[path] = fn; }, patch(path, fn) { routes[path] = fn; } };
   // Full SQL lifecycle is covered above; here only exercise the HTTP boundary.
   const verified = { expires_at: new Date(Date.now() + 300_000), status: 'VERIFIED', phone: '+375291234567', telegram_user_id: '900001' };
   const query = async sql => ({ rows: sql.includes('FOR UPDATE') ? [verified] : [] });
@@ -87,6 +87,8 @@ test('account routes enforce same origin and set HttpOnly 90-day cookie without 
   let res = response(), passed = false;
   middlewares[0](req, res, () => { passed = true; });
   assert.equal(res.code, 403); assert.equal(passed, false);
+  req.method = 'PATCH'; res = response(); middlewares[0](req,res,()=>{passed=true;});
+  assert.equal(res.code,403); assert.equal(passed,false); req.method='POST';
   res = response();
   req.get = name => name === 'origin' ? 'https://example.test' : 'example.test';
   middlewares[0](req, res, () => { passed = true; });
