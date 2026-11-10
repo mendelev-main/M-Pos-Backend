@@ -45,14 +45,14 @@ test('dashboard uses the verified phone, real memberships/balances, isolated pro
     assert.equal((await account.orders(session)).length, 1);
     assert.equal((await account.orders(session))[0].items[0].name, 'Мой кофе');
     assert.equal((await account.orders(otherSession))[0].external_id, 'private-other-order');
-    assert.equal((await account.updateProfile(session, { name:'Новое имя',birthDate:'1998-05-12',deliveryAddress:'ул. Тестовая, 12' })).user.birth_date, '1998-05-12');
+    assert.equal((await account.updateProfile(session, {name:'Новое имя',deliveryAddress:'ул. Тестовая, 12'})).user.name,'Новое имя');
+    assert.equal(Object.hasOwn(await account.current(session),'birth_date'),false);
     assert.equal((await account.current(session)).delivery_address, 'ул. Тестовая, 12');
     assert.equal((await account.current(otherSession)).name, 'Другой участник');
     assert.equal((await account.current(otherSession)).delivery_address, null);
     for (const payload of [{phone:otherPhone},{birthDate:'2099-01-01'},{birthDate:'2025-02-30'},{name:'<script>'},{deliveryAddress:'a'.repeat(301)}]) assert.equal((await account.updateProfile(session,payload)).status,400);
     assert.equal((await account.updateProfile('x'.repeat(43),{name:'No'})).status,401);
-    await account.updateProfile(session,{birthDate:null});
-    assert.equal((await account.current(session)).birth_date,null);
+    assert.equal((await account.updateProfile(session,{birthDate:null})).status,400);
     assert.equal((await account.current(session)).name,'Новое имя');
     await query('UPDATE public.loyalty_ledger SET progress_delta=0,reward_delta=1 WHERE program_id=$1 AND customer_id=$2', [coffee,customer]);
     assert.equal((await account.current(session)).programs.find(p => p.id===coffee).rewards,1);

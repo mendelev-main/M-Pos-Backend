@@ -21,6 +21,7 @@ test('account enters Telegram directly without reading or sending a phone field'
       return { ok: true, json: async () => result };
     },
   };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/loyalty-cards.js'),'utf8'),context);
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/account/account.js'), 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
   await get('login-form').submit({ preventDefault() {} });
@@ -37,13 +38,13 @@ test('signed-in dashboard hides guest promotions and renders the returned loyalt
     if (!elements.has(id)) elements.set(id, {hidden:false,innerHTML:'',textContent:'',addEventListener(event,fn){this[event]=fn;},getAttribute(name){return this[name]||null;},removeAttribute(name){delete this[name];},focus(){}});
     return elements.get(id);
   };
-  const user = {phone:'+375291234567',name:'Тестовый участник',birth_date:'1998-05-12',delivery_address:'Тестовая, 12',membership_active:true,programs:[{name:'Кофе <script>',required_quantity:5,progress:4,rewards:0}]};
+  const user = {phone:'+375291234567',name:'Тестовый участник',delivery_address:'Тестовая, 12',membership_active:true,programs:[{name:'Кофе <script>',required_quantity:5,progress:4,rewards:0}]};
   const context = {document:{getElementById:get,hidden:false,addEventListener(){}},window:{addEventListener(){}},Date,setTimeout(){},clearTimeout(){},fetch:async()=>({ok:true,json:async()=>({user})})};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/loyalty-cards.js'),'utf8'),context);
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/account/account.js'),'utf8'),context);
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(get('guest-view').hidden,true);
   assert.equal(get('member-view').hidden,false);
-  assert.equal(get('member-birthday').textContent,'12.05.1998');
   assert.equal(get('member-qr').src,'/api/account/qr');
   assert.match(get('member-programs').innerHTML,/4 из 5/);
   assert.match(get('member-programs').innerHTML,/Кофе &lt;script&gt;/);
