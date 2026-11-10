@@ -24,7 +24,7 @@ export MPOS_FLYWAY_ENV_FILE="$tmp/flyway.env" MPOS_DOCKER_NETWORK="$network"
 bash "$root/scripts/flyway.sh" migrate
 bash "$root/scripts/flyway.sh" migrate
 bash "$root/scripts/flyway.sh" validate
-test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 11
+test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 12
 test "$(sql -Atc "SELECT count(*) FROM information_schema.columns WHERE table_name='orders' AND column_name LIKE 'delivery_tariff_%'")" = 3
 
 test "$(sql -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('customer_account_challenges','customer_account_sessions')")" = 2
@@ -35,7 +35,9 @@ if sql -c "UPDATE public.phone_verifications SET status='VERIFIED' WHERE token_h
 sql -c "UPDATE public.phone_verifications SET phone='+375291234567',status='VERIFIED' WHERE token_hash='account-probe'; DELETE FROM public.phone_verifications WHERE token_hash='account-probe';"
 
 test "$(sql -Atc "SELECT has_table_privilege('mpos_app','public.customer_account_profiles','SELECT,INSERT,UPDATE')")" = t
-sql -c "SET ROLE mpos_app; INSERT INTO public.customer_account_profiles(phone,display_name,birth_date) VALUES('+375290000099','Profile probe','1998-05-12'); UPDATE public.customer_account_profiles SET delivery_address='Test' WHERE phone='+375290000099'; RESET ROLE; DELETE FROM public.customer_account_profiles WHERE phone='+375290000099';"
+sql -c "SET ROLE mpos_app; INSERT INTO public.customer_account_profiles(phone,display_name) VALUES('+375290000099','Profile probe'); UPDATE public.customer_account_profiles SET delivery_address='Test' WHERE phone='+375290000099'; RESET ROLE; DELETE FROM public.customer_account_profiles WHERE phone='+375290000099';"
+
+test "$(sql -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='customer_account_profiles' AND column_name='birth_date'")" = 0
 
 # A nonempty legacy database must refuse automatic baseline, then apply 004 onward
 # after an explicit reviewed baseline at version 3.
@@ -46,7 +48,7 @@ sed -i 's@/mpos$@/legacy@' "$tmp/flyway.env"
 if bash "$root/scripts/flyway.sh" migrate > "$tmp/unbaselined.log" 2>&1; then echo 'Unsafe automatic baseline' >&2; exit 1; fi
 bash "$root/scripts/flyway.sh" baseline-v3-reviewed
 bash "$root/scripts/flyway.sh" migrate
-test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 8
+test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 9
 
 # A changed applied migration fails validation; no automatic repair is allowed.
 mkdir -p "$tmp/release/scripts" "$tmp/release/db/migrations"
@@ -56,8 +58,8 @@ cp "$root/db/migrations/"*.sql "$tmp/release/db/migrations/"
 sed -i 's/Delivery tariffs/Changed delivery tariffs/' "$tmp/release/db/migrations/004_delivery_tariffs.sql"
 if bash "$tmp/release/scripts/flyway.sh" validate > "$tmp/checksum.log" 2>&1; then echo 'Checksum mismatch was accepted' >&2; exit 1; fi
 cp "$root/db/migrations/004_delivery_tariffs.sql" "$tmp/release/db/migrations/"
-printf 'BEGIN;\nCREATE TABLE rollback_probe(id integer);\nSELECT 1/0;\nCOMMIT;\n' > "$tmp/release/db/migrations/012_failure.sql"
+printf 'BEGIN;\nCREATE TABLE rollback_probe(id integer);\nSELECT 1/0;\nCOMMIT;\n' > "$tmp/release/db/migrations/013_failure.sql"
 if bash "$tmp/release/scripts/flyway.sh" migrate > "$tmp/failure.log" 2>&1; then echo 'Broken migration succeeded' >&2; exit 1; fi
 test "$(sql -Atc "SELECT to_regclass('public.rollback_probe') IS NULL")" = t
-test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE version='012'")" = 0
+test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE version='013'")" = 0
 echo 'Flyway/PostgreSQL checks passed: fresh DB, repeat, legacy baseline, checksum rejection, transactional rollback.'
