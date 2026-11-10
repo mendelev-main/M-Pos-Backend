@@ -80,3 +80,8 @@ body::before{display:none!important;}
 .site-footer{margin-top:32px;padding:24px 0;border-top:1px solid rgba(255,255,255,.1);text-align:center;font-size:13px;line-height:1.6}.site-footer a{color:#aeb3bd;text-underline-offset:4px}.site-footer a:hover{color:#fff}.site-footer a:focus-visible{outline:2px solid #fff;outline-offset:5px;border-radius:3px}
 
 .site-footer-links{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px 20px}.site-footer-links a{display:inline-block}
+
+/* Account entry shares the guest navigation on both catalog surfaces. */
+.site-nav a.account-link,.nav a.account-link{width:40px;height:40px;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:none;color:#f7f7f4}
+.account-link svg{display:block}.site-nav a.account-link:hover,.nav a.account-link:hover{background:rgba(255,255,255,.1)}
+@media(max-width:560px){.site-nav a.account-link,.nav a.account-link{width:36px;height:36px}}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -11,7 +11,8 @@ test('Flyway preparation preserves SQL bodies and refuses unsupported migrations
   const source = new URL('../db/migrations', import.meta.url).pathname;
   try {
     execFileSync('bash', [script, source, join(tmp, 'sql')]);
-    for (const [version, description] of [['001','baseline'],['002','owner_auth'],['003','runtime_defaults'],['004','delivery_tariffs']]) {
+    for (const file of readdirSync(source).filter(name => /^\d{3}_[a-z0-9_]+\.sql$/.test(name))) {
+      const [, version, description] = file.match(/^(\d{3})_([a-z0-9_]+)\.sql$/);
       const original = readFileSync(join(source, `${version}_${description}.sql`), 'utf8');
       const result = readFileSync(join(tmp, 'sql', `V${version}__${description}.sql`), 'utf8');
       assert.equal(result, original.replace(/^BEGIN;$/m, '').replace(/COMMIT;\n$/, '\n'));
