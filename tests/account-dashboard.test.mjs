@@ -14,9 +14,12 @@ test('dashboard uses the verified phone, real memberships/balances, isolated pro
     const database = (await db.query('SELECT current_database() AS name')).rows[0].name;
     const directory = new URL('../db/migrations/', import.meta.url);
     for (const name of (await readdir(directory)).filter(n => /^\d{3}_.+\.sql$/.test(n)).sort()) {
+      if(name==='012_remove_account_birth_date.sql') await db.query("INSERT INTO public.customer_account_profiles(phone,display_name,birth_date,delivery_address) VALUES('+375290000098','Preserved name','1998-05-12','Preserved address')");
       await db.exec((await readFile(new URL(name, directory), 'utf8')).replace('GRANT CONNECT ON DATABASE mpos TO mpos_app;', `GRANT CONNECT ON DATABASE "${database}" TO mpos_app;`));
     }
     const query = db.query.bind(db);
+    assert.equal((await query("SELECT count(*)::int AS n FROM information_schema.columns WHERE table_schema='public' AND table_name='customer_account_profiles' AND column_name='birth_date'")).rows[0].n,0);
+    assert.deepEqual((await query("SELECT display_name,delivery_address FROM public.customer_account_profiles WHERE phone='+375290000098'")).rows[0],{display_name:'Preserved name',delivery_address:'Preserved address'});
     const phone = '+375290000001', otherPhone = '+375290000002';
     const customer = (await query('INSERT INTO public.customers(name,normalized_phone) VALUES($1,$2) RETURNING id', ['Тестовый участник', phone])).rows[0].id;
     const otherCustomer = (await query('INSERT INTO public.customers(name,normalized_phone) VALUES($1,$2) RETURNING id', ['Другой участник', otherPhone])).rows[0].id;
