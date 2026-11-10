@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createPhoneVerificationService } from './phone-verification.js';
+import QRCode from 'qrcode';
 
 export const ACCOUNT_SESSION_SECONDS = 90 * 24 * 60 * 60;
 const hash = value => createHash('sha256').update(String(value)).digest('hex');
@@ -39,15 +40,61 @@ export function createCustomerAccount({ query, withTransaction, normalizePhone }
   }
   async function current(session) {
     if (!validToken(session)) return null;
-    const { rows } = await query(`SELECT s.phone,c.name,c.telegram_username FROM public.customer_account_sessions s
-      LEFT JOIN public.customers c ON c.normalized_phone=s.phone AND c.telegram_user_id=s.telegram_user_id
+    const { rows } = await query(`SELECT s.phone,COALESCE(p.display_name,c.name) AS name,c.telegram_username,
+      c.id AS customer_id,to_char(p.birth_date,'YYYY-MM-DD') AS birth_date,p.delivery_address,
+      COALESCE(public.loyalty_membership_active(c.id),FALSE) AS membership_active
+      FROM public.customer_account_sessions s
+      LEFT JOIN public.customers c ON c.normalized_phone=s.phone AND c.privacy_retired_at IS NULL
+      LEFT JOIN public.customer_account_profiles p ON p.phone=s.phone
       WHERE s.token_hash=$1 AND s.expires_at>now()`, [hash(session)]);
-    return rows[0] || null;
+    const user = rows[0];
+    if (!user) return null;
+    let programs = [];
+    if (user.customer_id && user.membership_active) {
+      const result = await query(`SELECT p.id,p.name,p.required_quantity,
+        b.progress::integer AS progress,b.rewards::integer AS rewards
+        FROM public.loyalty_programs p CROSS JOIN LATERAL public.loyalty_balance($1::uuid,p.id) b
+        WHERE p.is_active=TRUE ORDER BY p.created_at,p.id`, [user.customer_id]);
+      programs = result.rows.map(p => ({ ...p, required_quantity: Number(p.required_quantity), progress: Number(p.progress), rewards: Number(p.rewards) }));
+    }
+    return { ...user, programs };
+  }
+  async function updateProfile(session, payload) {
+    const user = await current(session);
+    if (!user) return { status: 401, error: 'Войдите в личный кабинет.' };
+    const fields = { name: 'display_name', birthDate: 'birth_date', deliveryAddress: 'delivery_address' };
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !Object.keys(payload).length || Object.keys(payload).some(key => !Object.hasOwn(fields,key))) return { status: 400, error: 'Проверьте поля профиля. Телефон изменить нельзя.' };
+    const entries = [];
+    for (const [key, raw] of Object.entries(payload)) {
+      if (raw !== null && typeof raw !== 'string') return { status: 400, error: 'Проверьте формат данных.' };
+      const value = raw?.trim() || null;
+      if (key === 'name' && value && (value.length > 80 || /[\p{Cc}<>]/u.test(value))) return { status: 400, error: 'Введите имя длиной до 80 символов.' };
+      if (key === 'deliveryAddress' && value && (value.length > 300 || /[\p{Cc}<>]/u.test(value))) return { status: 400, error: 'Введите адрес длиной до 300 символов.' };
+      if (key === 'birthDate' && value) {
+        const date = new Date(`${value}T00:00:00Z`);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0,10) !== value || value < '1900-01-01' || value > new Date().toISOString().slice(0,10)) return { status: 400, error: 'Укажите корректную дату рождения.' };
+      }
+      entries.push([fields[key], value]);
+    }
+    await query(`INSERT INTO public.customer_account_profiles(phone,${entries.map(([column]) => column).join(',')})
+      VALUES($1,${entries.map((_, i) => `$${i + 2}`).join(',')}) ON CONFLICT(phone) DO UPDATE SET
+      ${entries.map(([column]) => `${column}=EXCLUDED.${column}`).join(',')},updated_at=now()`, [user.phone, ...entries.map(([,value]) => value)]);
+    return { user: await current(session) };
+  }
+  async function orders(session) {
+    const user = await current(session);
+    if (!user) return null;
+    const { rows } = await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.total,o.created_at,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('name',i.product_name,'quantity',i.quantity,'price',i.price) ORDER BY i.created_at,i.id)
+        FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS items
+      FROM public.orders o WHERE o.phone=$1 OR ($2::uuid IS NOT NULL AND o.customer_id=$2::uuid)
+      ORDER BY o.created_at DESC,o.id DESC LIMIT 30`, [user.phone, user.customer_id]);
+    return rows;
   }
   async function logout(session) {
     if (validToken(session)) await query('DELETE FROM public.customer_account_sessions WHERE token_hash=$1', [hash(session)]);
   }
-  return { start, complete, current, logout };
+  return { start, complete, current, updateProfile, orders, logout };
 }
 
 function cookie(req, name) {
@@ -60,7 +107,7 @@ export function mountCustomerAccount(app, dependencies) {
     `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${req.secure || process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
   app.use('/api/account', (req, res, next) => {
     res.set('Cache-Control', 'no-store');
-    if (req.method === 'POST') {
+    if (['POST','PATCH','PUT','DELETE'].includes(req.method)) {
       const requestOrigin = `${req.protocol}://${req.get('host')}`;
       const expected = new URL(process.env.PUBLIC_BASE_URL || requestOrigin).origin;
       const sameOrigin = req.get('origin') === expected || process.env.NODE_ENV === 'development' && req.get('origin') === requestOrigin;
@@ -71,6 +118,28 @@ export function mountCustomerAccount(app, dependencies) {
   app.get('/api/account/session', async (req, res) => {
     try { res.json({ user: await account.current(cookie(req, 'mpos_account')) }); }
     catch { res.status(503).json({ error: 'Не удалось загрузить профиль. Попробуйте ещё раз.' }); }
+  });
+  app.patch('/api/account/profile', async (req, res) => {
+    try {
+      const result = await account.updateProfile(cookie(req, 'mpos_account'), req.body);
+      res.status(result.status || 200).json(result);
+    } catch { res.status(503).json({ error: 'Не удалось сохранить профиль. Попробуйте ещё раз.' }); }
+  });
+  app.get('/api/account/orders', async (req, res) => {
+    try {
+      const orders = await account.orders(cookie(req, 'mpos_account'));
+      if (!orders) return res.status(401).json({ error: 'Войдите в личный кабинет.' });
+      res.json({ orders });
+    } catch { res.status(503).json({ error: 'Не удалось загрузить историю заказов.' }); }
+  });
+  app.get('/api/account/qr', async (req, res) => {
+    try {
+      const user = await account.current(cookie(req, 'mpos_account'));
+      if (!user) return res.status(401).json({ error: 'Войдите в личный кабинет.' });
+      const svg = await QRCode.toString(user.phone, { type: 'svg', margin: 3, width: 192, errorCorrectionLevel: 'M', color: { dark: '#08090b', light: '#ffffff' } });
+      res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+      res.type('image/svg+xml').send(svg);
+    } catch { res.status(503).json({ error: 'Не удалось загрузить QR-код.' }); }
   });
   app.post('/api/account/start', async (req, res) => {
     if (!process.env.OWNER_BOT_SHARED_SECRET) return res.status(503).json({ error: 'Вход через Telegram пока не настроен. Попробуйте позже.' });

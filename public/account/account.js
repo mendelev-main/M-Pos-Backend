@@ -1,10 +1,11 @@
 (() => {
   const el = id => document.getElementById(id);
-  let timer, expiresAt = 0, checking = false;
+  const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  let timer, expiresAt = 0, checking = false, currentUser = null, historyLoaded = false;
   const message = text => { el('account-message').textContent = text; };
-  async function api(path, body) {
+  async function api(path, body, method = 'POST') {
     const options = { cache: 'no-store', credentials: 'same-origin' };
-    if (body !== undefined) Object.assign(options, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (body !== undefined) Object.assign(options, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const response = await fetch(`/api/account/${path}`, options);
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Не удалось выполнить запрос. Попробуйте ещё раз.');
@@ -15,14 +16,47 @@
     stop(); expiresAt = 0;
     el('login-form').hidden = false; el('telegram-step').hidden = true;
   }
+  const phoneLabel = phone => String(phone || '').replace(/^(\+375)(\d{2})(\d{3})(\d{2})(\d{2})$/, '$1 $2 $3-$4-$5');
+  function renderPrograms(user) {
+    const programs = Array.isArray(user.programs) ? user.programs : [];
+    if (!programs.length) {
+      el('member-programs').innerHTML = `<p class="member-empty">${user.membership_active ? 'Новые акции появятся здесь, когда станут доступны.' : 'Сейчас у вас нет активного участия в акциях. Уточните условия в заведении.'}</p>`;
+      return;
+    }
+    el('member-programs').innerHTML = programs.map(program => {
+      const goal = Math.max(1, Math.floor(Number(program.required_quantity) || 1));
+      const gift = Number(program.rewards) > 0;
+      const filled = gift ? goal : Math.max(0, Math.min(goal, Math.floor(Number(program.progress) || 0)));
+      const name = escape(program.name);
+      const progress = goal <= 12 ? `<div class="loyalty-stamps" role="progressbar" aria-label="${name}" aria-valuemin="0" aria-valuemax="${goal}" aria-valuenow="${filled}">${Array.from({length:goal}, (_,index) => `<span class="${index < filled ? 'is-filled' : ''}" aria-hidden="true">✦</span>`).join('')}<span class="stamp-gift ${gift ? 'is-ready' : ''}" aria-hidden="true">♡</span></div>` : `<progress class="account-progress" max="${goal}" value="${filled}" aria-label="${name}">${filled} из ${goal}</progress>`;
+      return `<article class="member-promotion"><div class="promotion-top"><svg aria-hidden="true"><use href="#icon-gift"/></svg><h3>${name}</h3><span class="promotion-count">${gift ? 'Подарок' : `${filled} из ${goal}`}</span></div>${progress}${gift ? '<p class="reward-note">Подарок доступен. Покажите карту при оплате.</p>' : ''}</article>`;
+    }).join('');
+  }
+  function renderUser(user) {
+    currentUser = user;
+    el('guest-view').hidden = !!user;
+    el('member-view').hidden = !user;
+    el('account-tagline').hidden = !!user;
+    if (!user) {
+      el('member-qr').removeAttribute('src');
+      el('member-programs').textContent = '';
+      el('member-orders').textContent = '';
+      el('member-history').open = false;
+      historyLoaded = false;
+      return;
+    }
+    stop(); message('');
+    el('member-name').textContent = user.name || 'Указать имя';
+    el('member-phone').textContent = phoneLabel(user.phone);
+    el('member-birthday').textContent = user.birth_date ? user.birth_date.split('-').reverse().join('.') : 'Указать дату';
+    el('member-address').textContent = user.delivery_address || 'Указать адрес';
+    el('qr-error').hidden = true;
+    if (!el('member-qr').getAttribute('src')) el('member-qr').src = '/api/account/qr';
+    renderPrograms(user);
+  }
   async function loadProfile() {
     const { user } = await api('session');
-    el('guest-profile').hidden = !!user; el('member-profile').hidden = !user;
-    if (user) {
-      stop(); message('');
-      el('member-name').textContent = user.name || 'Рады вас видеть';
-      el('member-phone').textContent = user.phone;
-    }
+    renderUser(user);
     return !!user;
   }
   async function complete(manual = false) {
@@ -34,7 +68,6 @@
       if (status === 'EXPIRED' || expiresAt && Date.now() >= expiresAt) { reset(); message('Время подтверждения истекло. Войдите ещё раз.'); return; }
       if (status === 'PENDING') {
         el('login-form').hidden = true; el('telegram-step').hidden = false;
-        // After returning from Telegram, the original link may no longer be in memory.
         el('telegram-link').hidden = !el('telegram-link').hasAttribute('href');
         if (manual) message('Поделитесь номером в Telegram, затем вернитесь сюда.');
         timer = setTimeout(() => complete(), 3000);
@@ -57,13 +90,56 @@
   });
   el('check-login').addEventListener('click', () => complete(true));
   el('restart-login').addEventListener('click', () => { reset(); message(''); el('login-button').focus(); });
+  el('member-qr').addEventListener('error', () => { el('qr-error').hidden = false; });
+  function openProfile(focus) {
+    if (!currentUser) return;
+    el('profile-name').value = currentUser.name || '';
+    el('profile-birthday').value = currentUser.birth_date || '';
+    el('profile-birthday').max = new Date().toISOString().slice(0,10);
+    el('profile-message').textContent = '';
+    el('profile-dialog').showModal(); el(focus).focus();
+  }
+  el('edit-profile').addEventListener('click', () => openProfile('profile-name'));
+  el('edit-birthday').addEventListener('click', () => openProfile('profile-birthday'));
+  el('close-profile').addEventListener('click', () => el('profile-dialog').close());
+  el('edit-address').addEventListener('click', () => {
+    if (!currentUser) return;
+    el('profile-address').value = currentUser.delivery_address || '';
+    el('address-message').textContent = '';
+    el('address-dialog').showModal(); el('profile-address').focus();
+  });
+  el('close-address').addEventListener('click', () => el('address-dialog').close());
+  async function saveProfile(buttonId, messageId, dialogId, payload) {
+    el(buttonId).disabled = true; el(messageId).textContent = '';
+    try { const { user } = await api('profile', payload, 'PATCH'); renderUser(user); el(dialogId).close(); }
+    catch (error) { el(messageId).textContent = error.message; }
+    finally { el(buttonId).disabled = false; }
+  }
+  el('profile-form').addEventListener('submit', event => {
+    event.preventDefault(); saveProfile('save-profile', 'profile-message', 'profile-dialog', { name: el('profile-name').value, birthDate: el('profile-birthday').value });
+  });
+  el('address-form').addEventListener('submit', event => {
+    event.preventDefault(); saveProfile('save-address', 'address-message', 'address-dialog', { deliveryAddress: el('profile-address').value });
+  });
+  el('member-history').addEventListener('toggle', async () => {
+    if (!el('member-history').open || historyLoaded || !currentUser) return;
+    el('member-orders').textContent = 'Загружаем заказы…';
+    const expectedPhone = currentUser.phone;
+    try {
+      const { orders } = await api('orders');
+      if (currentUser?.phone !== expectedPhone) return;
+      const statuses = { new: 'Создан', accepted: 'Принят', in_work: 'Готовится', ready: 'Готов', delivering: 'В пути', completed: 'Завершён', paid: 'Оплачен', cancelled: 'Отменён', canceled: 'Отменён' };
+      el('member-orders').innerHTML = orders.length ? orders.map(order => `<article class="account-order"><div class="account-order-heading"><span>${escape(new Date(order.created_at).toLocaleDateString('ru-RU'))}</span><strong>${Number(order.total || 0).toFixed(2)} BYN</strong></div><div class="account-order-status">${escape(statuses[order.status] || 'Статус уточняется')}</div><p>${(order.items || []).map(item => `${escape(item.name)} × ${Number(item.quantity)}`).join('<br>') || 'Состав заказа недоступен'}</p></article>`).join('') : '<p>У вас пока нет онлайн-заказов.</p>';
+      historyLoaded = true;
+    } catch (error) { if (currentUser?.phone === expectedPhone) el('member-orders').textContent = error.message; }
+  });
   el('logout-button').addEventListener('click', async () => {
     el('logout-button').disabled = true;
     try { await api('logout', {}); reset(); await loadProfile(); }
     catch (error) { message(error.message); }
     finally { el('logout-button').disabled = false; }
   });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else if (!el('telegram-step').hidden) complete(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else if (!el('telegram-step').hidden) complete(); else if (currentUser) loadProfile().catch(error => message(error.message)); });
   window.addEventListener('pageshow', event => { if (event.persisted) loadProfile().then(signedIn => { if (!signedIn) complete(); }).catch(error => message(error.message)); });
   loadProfile().then(signedIn => { if (!signedIn) complete(); }).catch(error => message(error.message));
 })();
