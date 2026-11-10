@@ -10,7 +10,7 @@ test('Telegram usernames normalize without accepting URLs or injected handles',(
 test('verified phone stores observed username and distinguishes old bot from username removal',async()=>{
  for(const username of ['valid_user',null,undefined]){
   let observed,storedUsername;
-  const initial={id:'verification',phone:'synthetic',status:'PENDING',expires_at:new Date(Date.now()+300000)};
+  const initial={id:'verification',phone:'+375291234567',status:'PENDING',expires_at:new Date(Date.now()+300000)};
   const query=async(sql,args)=>{
     if(sql.startsWith('SELECT'))return {rows:[initial]};
     assert.match(sql,/telegram_username=CASE WHEN \$3::boolean THEN \$4/);
@@ -18,7 +18,7 @@ test('verified phone stores observed username and distinguishes old bot from use
     [, , observed,storedUsername]=args;
     return {rows:[{...initial,status:'VERIFIED'}]};
   };
-  const api=createPhoneVerificationService(query,x=>x);assert.equal((await api.confirm('synthetic-token','synthetic',123,username)).ok,true);
+  const api=createPhoneVerificationService(query,x=>x);assert.equal((await api.confirm('synthetic-token','+375291234567',123,username)).ok,true);
   assert.equal(observed,username!==undefined);assert.equal(storedUsername,username??null);
  }
 });

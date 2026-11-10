@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#08090b">
+  <title>Личный кабинет — Проект</title>
+  <link rel="stylesheet" href="/guest-shell.css">
+  <link rel="stylesheet" href="/account/account.css">
+  <script defer src="/account/account.js"></script>
+</head>
+<body>
+  <header class="site-top"><div class="site-topin"><a class="brand" href="/">Проект</a><nav class="site-nav" aria-label="Разделы"><a href="/menu/">Меню</a><a href="/">Онлайн заказ</a><a class="account-link active" href="/account/" aria-label="Личный кабинет" aria-current="page"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg></a></nav></div></header>
+  <main class="account-shell">
+    <a class="back-link" href="/menu/">← Вернуться в меню</a>
+    <div class="account-intro"><h1>Личный<br>кабинет</h1><p>Всё ваше.<br>В одном месте.</p></div>
+    <div class="account-layout">
+      <section class="profile-panel" aria-labelledby="profile-title">
+        <div class="profile-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="12" cy="8" r="3.5"/><path d="M4 22v-3a8 8 0 0 1 16 0v3"/></svg></div>
+        <div id="guest-profile">
+          <h2 id="profile-title">Давайте знакомиться</h2>
+          <p class="profile-copy">Войдите через Telegram, чтобы ваш профиль всегда был под рукой.</p>
+          <form id="login-form">
+            <button class="primary-button" id="login-button" type="submit"><svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="m21.4 3.4-3.2 16c-.2 1.1-.9 1.4-1.8.9l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.4-5 9.1-8.2c.4-.4-.1-.6-.6-.3L5.8 13.1 1 11.6c-1-.3-1-1 .2-1.4L20 3c.9-.3 1.6.2 1.4.4Z"/></svg>Войти через Telegram</button>
+          </form>
+          <div id="telegram-step" hidden>
+            <div class="pending-note"><span class="pending-dot"></span>Ждём подтверждения в Telegram</div>
+            <p class="profile-copy">Откройте бота, нажмите «Старт» и поделитесь своим номером телефона. Принимаем только номера +375.</p>
+            <a id="telegram-link" class="primary-button" target="_blank" rel="noopener noreferrer">Открыть Telegram</a>
+            <button type="button" class="text-button" id="check-login">Я подтвердил номер</button>
+            <button type="button" class="text-button muted" id="restart-login">Начать заново</button>
+          </div>
+        </div>
+        <div id="member-profile" hidden><h2 id="member-name">Ваш профиль</h2><p id="member-phone" class="member-phone"></p><div class="verified-label">Номер подтверждён через Telegram</div><button type="button" id="logout-button" class="text-button">Выйти из аккаунта</button></div>
+        <p id="account-message" class="account-message" role="status" aria-live="polite"></p>
+      </section>
+      <div class="account-content">
+        <section class="loyalty-panel" aria-labelledby="loyalty-title"><div class="panel-heading"><h2 id="loyalty-title">Приятно возвращаться</h2><span class="soon-tag">Скоро</span></div><p>Здесь появятся ваши бонусы<br>и любимые предложения.</p><div class="loyalty-stamps" aria-hidden="true"><span>✦</span><span>✦</span><span>✦</span><span>✦</span><span>✦</span><span class="stamp-gift">♡</span></div></section>
+        <section class="orders-panel" aria-labelledby="orders-title"><div class="panel-heading"><h2 id="orders-title">Ваши заказы</h2><span class="soon-tag">Скоро</span></div><div class="orders-empty"><svg aria-hidden="true" width="42" height="46" viewBox="0 0 42 46" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M9 6h24v35l-4-3-4 3-4-3-4 3-4-3-4 3V6Z"/><path d="M15 15h12M15 22h12M15 29h7"/></svg><h3>Здесь будет ваша история</h3><p>Сохраним любимое, чтобы было<br>проще заказать снова.</p><a href="/" class="secondary-button">Выбрать что-нибудь вкусное</a></div></section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

@@ -1,4 +1,5 @@
 import { verifyPosAdministrationPassword } from './pos-administration-auth.js';
+import { mountCustomerAccount } from './customer-account.js';
 import { createLoyaltyBalanceAdjustment } from './loyalty-adjustment.js';
 import { createPosLoyaltyConsent, posLoyaltyTerms } from './pos-loyalty-consent.js';
 import { createPrivacyService, validateLegalAcknowledgement, publicLegalConfiguration } from "./privacy-service.js";
@@ -27,6 +28,7 @@ app.set("trust proxy", 1);
 app.use(cors());
 app.use("/api/owner/report", express.json({ limit: "14mb" }));
 app.use(express.json({ limit: "2mb" }));
+mountCustomerAccount(app, { query, withTransaction, normalizePhone });
 app.use((req,res,next)=>{
   if(!isSiteSleepWindow())return next();
   const retrySeconds=Math.ceil(millisecondsUntilSiteWake()/1000),path=String(req.path||"");
@@ -813,4 +815,4 @@ app.post("/api/orders/:id/accept",async(req,res)=>{try{if(!await requireDevice(r
 
 app.patch("/api/orders/:id/status",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim(),status=String(req.body?.status||"").trim(),allowed=new Set(["new","accepted","preparing","ready","cancelled"]);if(!id||!allowed.has(status))return res.status(400).json({error:"Invalid status"});const {rows}=await query(`UPDATE public.orders SET status=$2,updated_at=now() WHERE id=$1::uuid RETURNING id,status,updated_at`,[id,status]);if(!rows?.[0])return res.status(404).json({error:"Заказ не найден"});res.json({ok:true,order:rows[0]});}catch(error){console.error("PATCH /api/orders/:id/status:",error);res.status(500).json({error:"Не удалось обновить статус заказа"})}});
 
-app.listen(port, () => console.log(`Prilavok backend listening on ${port}`));
+app.listen(port, process.env.HOST, () => console.log(`Prilavok backend listening on ${port}`));
