@@ -23,15 +23,9 @@
       el('member-programs').innerHTML = `<p class="member-empty">${user.membership_active ? 'Новые акции появятся здесь, когда станут доступны.' : 'Сейчас у вас нет активного участия в акциях. Уточните условия в заведении.'}</p>`;
       return;
     }
-    el('member-programs').innerHTML = programs.map(program => {
-      const goal = Math.max(1, Math.floor(Number(program.required_quantity) || 1));
-      const gift = Number(program.rewards) > 0;
-      const filled = gift ? goal : Math.max(0, Math.min(goal, Math.floor(Number(program.progress) || 0)));
-      const name = escape(program.name);
-      const progress = goal <= 12 ? `<div class="loyalty-stamps" role="progressbar" aria-label="${name}" aria-valuemin="0" aria-valuemax="${goal}" aria-valuenow="${filled}">${Array.from({length:goal}, (_,index) => `<span class="${index < filled ? 'is-filled' : ''}" aria-hidden="true">✦</span>`).join('')}<span class="stamp-gift ${gift ? 'is-ready' : ''}" aria-hidden="true">♡</span></div>` : `<progress class="account-progress" max="${goal}" value="${filled}" aria-label="${name}">${filled} из ${goal}</progress>`;
-      return `<article class="member-promotion"><div class="promotion-top"><svg aria-hidden="true"><use href="#icon-gift"/></svg><h3>${name}</h3><span class="promotion-count">${gift ? 'Подарок' : `${filled} из ${goal}`}</span></div>${progress}${gift ? '<p class="reward-note">Подарок доступен. Покажите карту при оплате.</p>' : ''}</article>`;
-    }).join('');
+    el('member-programs').innerHTML = window.GuestLoyaltyCards.render(programs);
   }
+
   function renderUser(user) {
     currentUser = user;
     el('guest-view').hidden = !!user;
@@ -48,7 +42,6 @@
     stop(); message('');
     el('member-name').textContent = user.name || 'Указать имя';
     el('member-phone').textContent = phoneLabel(user.phone);
-    el('member-birthday').textContent = user.birth_date ? user.birth_date.split('-').reverse().join('.') : 'Указать дату';
     el('member-address').textContent = user.delivery_address || 'Указать адрес';
     el('qr-error').hidden = true;
     if (!el('member-qr').getAttribute('src')) el('member-qr').src = '/api/account/qr';
@@ -94,13 +87,10 @@
   function openProfile(focus) {
     if (!currentUser) return;
     el('profile-name').value = currentUser.name || '';
-    el('profile-birthday').value = currentUser.birth_date || '';
-    el('profile-birthday').max = new Date().toISOString().slice(0,10);
     el('profile-message').textContent = '';
     el('profile-dialog').showModal(); el(focus).focus();
   }
   el('edit-profile').addEventListener('click', () => openProfile('profile-name'));
-  el('edit-birthday').addEventListener('click', () => openProfile('profile-birthday'));
   el('close-profile').addEventListener('click', () => el('profile-dialog').close());
   el('edit-address').addEventListener('click', () => {
     if (!currentUser) return;
@@ -116,7 +106,7 @@
     finally { el(buttonId).disabled = false; }
   }
   el('profile-form').addEventListener('submit', event => {
-    event.preventDefault(); saveProfile('save-profile', 'profile-message', 'profile-dialog', { name: el('profile-name').value, birthDate: el('profile-birthday').value });
+    event.preventDefault(); saveProfile('save-profile', 'profile-message', 'profile-dialog', {name:el('profile-name').value});
   });
   el('address-form').addEventListener('submit', event => {
     event.preventDefault(); saveProfile('save-address', 'address-message', 'address-dialog', { deliveryAddress: el('profile-address').value });

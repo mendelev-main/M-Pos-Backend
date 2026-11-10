@@ -41,7 +41,7 @@ export function createCustomerAccount({ query, withTransaction, normalizePhone }
   async function current(session) {
     if (!validToken(session)) return null;
     const { rows } = await query(`SELECT s.phone,COALESCE(p.display_name,c.name) AS name,c.telegram_username,
-      c.id AS customer_id,to_char(p.birth_date,'YYYY-MM-DD') AS birth_date,p.delivery_address,
+      c.id AS customer_id,p.delivery_address,
       COALESCE(public.loyalty_membership_active(c.id),FALSE) AS membership_active
       FROM public.customer_account_sessions s
       LEFT JOIN public.customers c ON c.normalized_phone=s.phone AND c.privacy_retired_at IS NULL
@@ -62,7 +62,7 @@ export function createCustomerAccount({ query, withTransaction, normalizePhone }
   async function updateProfile(session, payload) {
     const user = await current(session);
     if (!user) return { status: 401, error: 'Войдите в личный кабинет.' };
-    const fields = { name: 'display_name', birthDate: 'birth_date', deliveryAddress: 'delivery_address' };
+    const fields = { name: 'display_name', deliveryAddress: 'delivery_address' };
     if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !Object.keys(payload).length || Object.keys(payload).some(key => !Object.hasOwn(fields,key))) return { status: 400, error: 'Проверьте поля профиля. Телефон изменить нельзя.' };
     const entries = [];
     for (const [key, raw] of Object.entries(payload)) {
@@ -70,10 +70,6 @@ export function createCustomerAccount({ query, withTransaction, normalizePhone }
       const value = raw?.trim() || null;
       if (key === 'name' && value && (value.length > 80 || /[\p{Cc}<>]/u.test(value))) return { status: 400, error: 'Введите имя длиной до 80 символов.' };
       if (key === 'deliveryAddress' && value && (value.length > 300 || /[\p{Cc}<>]/u.test(value))) return { status: 400, error: 'Введите адрес длиной до 300 символов.' };
-      if (key === 'birthDate' && value) {
-        const date = new Date(`${value}T00:00:00Z`);
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0,10) !== value || value < '1900-01-01' || value > new Date().toISOString().slice(0,10)) return { status: 400, error: 'Укажите корректную дату рождения.' };
-      }
       entries.push([fields[key], value]);
     }
     await query(`INSERT INTO public.customer_account_profiles(phone,${entries.map(([column]) => column).join(',')})
