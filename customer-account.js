@@ -52,7 +52,8 @@ export function createCustomerAccount({ query, withTransaction, normalizePhone }
     let programs = [];
     if (user.customer_id && user.membership_active) {
       const result = await query(`SELECT p.id,p.name,p.required_quantity,
-        b.progress::integer AS progress,b.rewards::integer AS rewards
+        b.progress::integer AS progress,b.rewards::integer AS rewards,
+        ARRAY(SELECT r.product_id FROM public.loyalty_reward_products r WHERE r.program_id=p.id ORDER BY r.product_id) AS reward_product_ids
         FROM public.loyalty_programs p CROSS JOIN LATERAL public.loyalty_balance($1::uuid,p.id) b
         WHERE p.is_active=TRUE ORDER BY p.created_at,p.id`, [user.customer_id]);
       programs = result.rows.map(p => ({ ...p, required_quantity: Number(p.required_quantity), progress: Number(p.progress), rewards: Number(p.rewards) }));
@@ -77,20 +78,29 @@ export function createCustomerAccount({ query, withTransaction, normalizePhone }
       ${entries.map(([column]) => `${column}=EXCLUDED.${column}`).join(',')},updated_at=now()`, [user.phone, ...entries.map(([,value]) => value)]);
     return { user: await current(session) };
   }
-  async function orders(session) {
+  async function orders(session, cursor) {
+    let before = null;
+    if(cursor){try{before=JSON.parse(Buffer.from(String(cursor),"base64url").toString());if(!Array.isArray(before)||before.length!==2||!Number.isFinite(Date.parse(before[0]))||! /^[0-9a-f-]{36}$/i.test(before[1]))throw Error();}catch{return {error:"Обновите историю заказов.",status:400};}}
     const user = await current(session);
     if (!user) return null;
-    const { rows } = await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.total,o.created_at,
+    const { rows } = await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.total,o.created_at,o.created_at::text AS cursor_created_at,
       COALESCE((SELECT jsonb_agg(jsonb_build_object('name',i.product_name,'quantity',i.quantity,'price',i.price) ORDER BY i.created_at,i.id)
         FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS items
-      FROM public.orders o WHERE o.phone=$1 OR ($2::uuid IS NOT NULL AND o.customer_id=$2::uuid)
-      ORDER BY o.created_at DESC,o.id DESC LIMIT 30`, [user.phone, user.customer_id]);
-    return rows;
+      FROM public.orders o WHERE (o.phone=$1 OR ($2::uuid IS NOT NULL AND o.customer_id=$2::uuid))
+      AND ($3::timestamptz IS NULL OR (o.created_at,o.id)<($3::timestamptz,$4::uuid))
+      ORDER BY o.created_at DESC,o.id DESC LIMIT 6`, [user.phone, user.customer_id,before?.[0]||null,before?.[1]||null]);
+    const page=rows.slice(0,5),last=page.at(-1);
+    return {orders:page,nextCursor:rows.length>5?Buffer.from(JSON.stringify([last.cursor_created_at||last.created_at,last.id])).toString('base64url'):null};
+  }
+  async function identity(session) {
+    if(!validToken(session))return null;
+    const {rows}=await query('SELECT phone,telegram_user_id FROM public.customer_account_sessions WHERE token_hash=$1 AND expires_at>now()',[hash(session)]);
+    return rows[0]||null;
   }
   async function logout(session) {
     if (validToken(session)) await query('DELETE FROM public.customer_account_sessions WHERE token_hash=$1', [hash(session)]);
   }
-  return { start, complete, current, updateProfile, orders, logout };
+  return { start, complete, current, identity, updateProfile, orders, logout };
 }
 
 function cookie(req, name) {
@@ -123,9 +133,9 @@ export function mountCustomerAccount(app, dependencies) {
   });
   app.get('/api/account/orders', async (req, res) => {
     try {
-      const orders = await account.orders(cookie(req, 'mpos_account'));
+      const orders = await account.orders(cookie(req, 'mpos_account'),req.query?.cursor);
       if (!orders) return res.status(401).json({ error: 'Войдите в личный кабинет.' });
-      res.json({ orders });
+      res.status(orders.status||200).json(orders);
     } catch { res.status(503).json({ error: 'Не удалось загрузить историю заказов.' }); }
   });
   app.get('/api/account/qr', async (req, res) => {
@@ -170,4 +180,5 @@ export function mountCustomerAccount(app, dependencies) {
       res.json({ ok: true });
     } catch { res.status(503).json({ error: 'Не удалось выйти. Попробуйте ещё раз.' }); }
   });
+  return account;
 }

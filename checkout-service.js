@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 export const CHECKOUT_TTL_MS = 5 * 60 * 1000;
 
-export function createCheckoutService({ query, normalizePhone, validateOrderContact, phoneVerification, availability = null, deliveryFee = 0, deliveryTariffs = null, validateLegal = null }) {
+export function createCheckoutService({ query, normalizePhone, validateOrderContact, phoneVerification, availability = null, deliveryFee = 0, deliveryTariffs = null, validateLegal = null, withTransaction = null, resolveAccount = null, manualDelivery = false, autoEnroll = false }) {
   const hash = value => createHash("sha256").update(String(value)).digest("hex");
 
   async function prepareOrder(payload) {
@@ -20,17 +20,47 @@ export function createCheckoutService({ query, normalizePhone, validateOrderCont
     const items=[];let subtotal=0;
     for(const raw of requestedItems){const product=productMap.get(String(raw.productId)),quantity=Number(raw.quantity);if(!Number.isFinite(quantity)||quantity<=0||quantity>99)return {error:"Некорректное количество товара",status:400};subtotal+=Number(product.price||0)*quantity;items.push({product_id:product.id,external_product_id:product.external_id,product_name:product.name,price:Number(product.price||0),quantity,comment:raw.comment?String(raw.comment).trim().slice(0,500):null});}
     let deliveryTariff=null, tariffCents=0, legacyTariffs=!deliveryTariffs;
-    if(orderType==="Доставка"&&deliveryTariffs){const resolved=await deliveryTariffs.resolve(payload);if(resolved.error)return resolved;legacyTariffs=resolved.legacy===true;deliveryTariff=resolved.tariff||null;tariffCents=resolved.cents||0;}
-    const fee=!legacyTariffs?(orderType==="Доставка"?tariffCents/100:0):orderType==="Доставка"?(Number.isFinite(Number(deliveryFee))?Number(deliveryFee):0):0;
-    return {order:{orderType,customerName,phone,address:orderType==="Доставка"?address:"",comment,items,subtotal,fee,deliveryTariff,total:(Math.round(subtotal*100)+Math.round(fee*100))/100}};
+    if(!manualDelivery&&orderType==="Доставка"&&deliveryTariffs){const resolved=await deliveryTariffs.resolve(payload);if(resolved.error)return resolved;legacyTariffs=resolved.legacy===true;deliveryTariff=resolved.tariff||null;tariffCents=resolved.cents||0;}
+    if(manualDelivery&&orderType==="Доставка")deliveryTariff={id:'administrator',name:'Доставка: стоимость уточняет администратор',version:1};
+    const fee=manualDelivery?0:!legacyTariffs?(orderType==="Доставка"?tariffCents/100:0):orderType==="Доставка"?(Number.isFinite(Number(deliveryFee))?Number(deliveryFee):0):0;
+    return {order:{orderType,customerName,phone,address:orderType==="Доставка"?address:"",comment,items,subtotal,fee,deliveryTariff,deliveryFeePending:manualDelivery&&orderType==="Доставка",total:(Math.round(subtotal*100)+Math.round(fee*100))/100}};
   }
 
-  async function create(payload) {
+  async function create(payload, accountToken = '') {
+    const identity=resolveAccount&&accountToken?await resolveAccount(accountToken):null;
+    if(accountToken&&!identity)return {status:401,error:'Войдите снова, затем повторите оформление.'};
+    if(identity&&normalizePhone(payload?.phone)!==identity.phone)return {status:400,error:'Используйте подтверждённый телефон личного кабинета.'};
+    if(payload?.giftProgramIds!==undefined&&(!Array.isArray(payload.giftProgramIds)||payload.giftProgramIds.length>30||payload.giftProgramIds.some(id=>! /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))))return {status:400,error:'Проверьте выбранные подарки.'};
+    if(payload?.giftProgramIds?.length&&!identity)return {status:401,error:'Войдите, чтобы использовать подарок.'};
     if(validateLegal){const invalid=validateLegal(payload);if(invalid)return invalid;}
+    const requestFingerprint=hash(JSON.stringify({...payload,requestId:undefined}));
+    if(identity&&/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(payload?.requestId||'')){
+      const {rows}=await query('SELECT request_fingerprint,order_id FROM public.checkout_sessions WHERE phone=$1 AND request_id=$2::uuid',[identity.phone,payload.requestId]);
+      if(rows[0])return rows[0].request_fingerprint===requestFingerprint?{status:'ORDER_CREATED',orderId:rows[0].order_id,duplicate:true}:{status:409,error:'Заказ изменился. Откройте корзину заново.'};
+    }
     const prepared=await prepareOrder(payload);if(prepared.error)return prepared;
+    prepared.order.giftProgramIds=[...new Set(payload?.giftProgramIds||[])].sort();
+    if(identity&&withTransaction){
+      if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(payload?.requestId||''))return {status:400,error:'Обновите страницу и повторите оформление.'};
+      prepared.order.legal={version:payload.legal.version,acknowledged:true};prepared.order.loyaltyOptIn=autoEnroll||payload.loyaltyOptIn===true;
+      const fingerprint=requestFingerprint;
+      try{return await withTransaction(async client=>{
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",['checkout:'+identity.phone]);
+        const {rows:sessions}=await client.query('SELECT phone,telegram_user_id FROM public.customer_account_sessions WHERE token_hash=$1 AND expires_at>now() FOR SHARE',[hash(accountToken)]);
+        if(sessions[0]?.phone!==identity.phone)return {status:401,error:'Сессия истекла. Войдите снова.'};
+        const {rows:previous}=await client.query('SELECT request_fingerprint,order_id FROM public.checkout_sessions WHERE phone=$1 AND request_id=$2::uuid',[identity.phone,payload.requestId]);
+        if(previous[0])return previous[0].request_fingerprint===fingerprint?{status:'ORDER_CREATED',orderId:previous[0].order_id,duplicate:true}:{status:409,error:'Заказ изменился. Откройте корзину заново.'};
+        const verificationHash=hash(randomBytes(32)),checkoutHash=hash(randomBytes(32));
+        await client.query(`INSERT INTO public.phone_verifications(token_hash,phone,status,expires_at,verified_at,telegram_user_id) VALUES($1,$2,'VERIFIED',now()+interval '5 minutes',now(),$3)`,[verificationHash,identity.phone,identity.telegram_user_id]);
+        await client.query(`INSERT INTO public.checkout_sessions(token_hash,phone,status,order_payload,verification_token_hash,expires_at,request_id,request_fingerprint) VALUES($1,$2,'PENDING',$3::jsonb,$4,now()+interval '5 minutes',$5::uuid,$6)`,[checkoutHash,identity.phone,JSON.stringify(prepared.order),verificationHash,payload.requestId,fingerprint]);
+        const {rows}=await client.query('SELECT public.finalize_verified_checkout($1,$2,$3) AS result',[verificationHash,`WEB-${Date.now()}-${randomBytes(3).toString('hex').toUpperCase()}`,randomUUID().replace(/-/g,'')]);
+        if(!rows[0]?.result?.ok)throw Error('CHECKOUT_FAILED');
+        return {status:'ORDER_CREATED',...rows[0].result};
+      });}catch(error){if(/LOYALTY_GIFT_UNAVAILABLE/.test(error.message))return {status:409,error:'Подарок больше недоступен. Обновите корзину.'};if(/OUT_OF_STOCK|AVAILABILITY_UNAVAILABLE/.test(error.message))return {status:409,error:'Остатки изменились. Обновите корзину.'};throw error;}
+    }
     const checkoutToken=randomBytes(32).toString("base64url"),expiresAt=new Date(Date.now()+CHECKOUT_TTL_MS).toISOString(),verification=await phoneVerification.create(prepared.order.phone);
     if(verification.error)return verification;
-    if(validateLegal){prepared.order.legal={version:payload.legal.version,acknowledged:true};prepared.order.loyaltyOptIn=payload.loyaltyOptIn===true;}
+    if(validateLegal){prepared.order.legal={version:payload.legal.version,acknowledged:true};prepared.order.loyaltyOptIn=autoEnroll||payload.loyaltyOptIn===true;}
     await query(`INSERT INTO public.checkout_sessions (token_hash,phone,status,order_payload,verification_token_hash,expires_at) VALUES ($1,$2,'PENDING',$3::jsonb,$4,$5::timestamptz)`,[hash(checkoutToken),prepared.order.phone,JSON.stringify(prepared.order),hash(verification.token),expiresAt]);
     return {checkoutToken,status:"PENDING",expiresAt,telegramUrl:verification.telegramUrl,deliveryTariff:prepared.order.deliveryTariff,deliveryFee:prepared.order.fee,total:prepared.order.total};
   }

@@ -28,7 +28,7 @@ app.set("trust proxy", 1);
 app.use(cors());
 app.use("/api/owner/report", express.json({ limit: "14mb" }));
 app.use(express.json({ limit: "2mb" }));
-mountCustomerAccount(app, { query, withTransaction, normalizePhone });
+const customerAccount = mountCustomerAccount(app, { query, withTransaction, normalizePhone });
 app.use((req,res,next)=>{
   if(!isSiteSleepWindow())return next();
   const retrySeconds=Math.ceil(millisecondsUntilSiteWake()/1000),path=String(req.path||"");
@@ -54,7 +54,7 @@ mountOwnerRoutes(app,{query});
 const phoneVerification = createPhoneVerificationService(query, normalizePhone);
 const availability = createAvailabilityService({ query });
 const deliveryTariffs = createDeliveryTariffs({ query, withTransaction, sourceKey: process.env.DELIVERY_TARIFF_DEVICE_KEY || "" });
-const checkout = createCheckoutService({ query, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee, deliveryTariffs, validateLegal:validateLegalAcknowledgement });
+const checkout = createCheckoutService({ query, normalizePhone, validateOrderContact, phoneVerification, availability, deliveryFee, deliveryTariffs, validateLegal:validateLegalAcknowledgement, withTransaction, resolveAccount:token=>customerAccount.identity(token), manualDelivery:true, autoEnroll:true });
 const telegramOrderAlerts = createTelegramOrderAlerts({ query, botToken: process.env.TELEGRAM_BOT_TOKEN });
 const privacy = createPrivacyService({query,phoneVerification,normalizePhone});
 const livePosReports = createLivePosReports({ query, createId: () => randomUUID() });
@@ -104,7 +104,9 @@ app.put("/api/device/delivery-tariffs", async (req, res) => {
 app.post("/api/checkout", async (req, res) => {
   try {
     if(!orderingOpenNow())return res.status(503).json({error:"Онлайн-заказы принимаются с 10:00 до 22:00",opensAt:"10:00",closesAt:"22:00",timeZone:VENUE_TIME_ZONE});
-    const result = await checkout.create(req.body);
+    const accountToken=String(req.headers?.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('mpos_account='))?.slice(13)||'';
+    const result = await checkout.create(req.body,accountToken);
+    if(result.status==='ORDER_CREATED'&&!result.duplicate)void telegramOrderAlerts.notifyNewOrder().catch(error=>console.error('Telegram POS order alert:',error));
     if (result.error) return res.status(result.status || 400).json({ error: result.error, code: result.code, fieldErrors: globalThis.OrderValidation.validateFields(req.body || {}) });
     return res.status(201).json(result);
   } catch (error) {
@@ -550,8 +552,8 @@ async function pushNewOrders(){
   }
   if(eventPollBusy || !eventClients.size) return; eventPollBusy = true;
   try {
-    const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.customer_id,o.customer_name,o.phone,o.address,o.comment,o.total,o.delivery_fee,o.delivery_tariff_id,o.delivery_tariff_name,o.delivery_tariff_version,o.created_at,o.updated_at,
-      COALESCE((SELECT jsonb_agg(jsonb_build_object('id',i.id,'product_id',i.product_id,'external_product_id',i.external_product_id,'product_name',i.product_name,'price',i.price,'quantity',i.quantity,'comment',i.comment) ORDER BY i.created_at,i.id) FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS order_items
+    const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.customer_id,o.customer_name,o.phone,o.address,o.comment,o.total,o.delivery_fee,o.delivery_fee_pending,o.discount_total,o.delivery_tariff_id,o.delivery_tariff_name,o.delivery_tariff_version,o.created_at,o.updated_at,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('id',i.id,'product_id',i.product_id,'external_product_id',i.external_product_id,'product_name',i.product_name,'price',i.price,'quantity',i.quantity,'comment',i.comment,'is_loyalty_reward',i.is_loyalty_reward,'loyalty_program_id',i.loyalty_program_id) ORDER BY i.created_at,i.id) FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS order_items
       FROM public.orders o WHERE o.status='new' ORDER BY o.created_at DESC LIMIT 20`);
     const payload=JSON.stringify({type:"orders",orders:rows||[]});for(const client of eventClients){try{client.res.write(`data: ${payload}\n\n`);}catch(e){}}
   }
@@ -809,10 +811,10 @@ app.post("/api/orders", async (req, res) => {
 
 });
 
-app.get("/api/orders/:token",async(req,res)=>{try{const token=String(req.params.token||"").trim();if(!token)return res.status(400).json({error:"Missing token"});const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.customer_name,o.phone,o.address,o.comment,o.total,o.delivery_fee,o.delivery_tariff_id,o.delivery_tariff_name,o.delivery_tariff_version,o.created_at,o.updated_at,COALESCE((SELECT jsonb_agg(jsonb_build_object('product_name',i.product_name,'price',i.price,'quantity',i.quantity,'comment',i.comment) ORDER BY i.created_at,i.id) FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS order_items FROM public.orders o WHERE o.tracking_token=$1 LIMIT 1`,[token]);const order=rows?.[0];if(!order)return res.status(404).json({error:"Заказ не найден"});res.json({order});}catch(error){console.error("GET /api/orders/:token:",error);res.status(500).json({error:"Не удалось загрузить заказ"})}});
+app.get("/api/orders/:token",async(req,res)=>{try{const token=String(req.params.token||"").trim();if(!token)return res.status(400).json({error:"Missing token"});const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.customer_name,o.phone,o.address,o.comment,o.total,o.delivery_fee,o.delivery_fee_pending,o.discount_total,o.delivery_tariff_id,o.delivery_tariff_name,o.delivery_tariff_version,o.created_at,o.updated_at,COALESCE((SELECT jsonb_agg(jsonb_build_object('product_name',i.product_name,'price',i.price,'quantity',i.quantity,'comment',i.comment,'is_loyalty_reward',i.is_loyalty_reward,'loyalty_program_id',i.loyalty_program_id) ORDER BY i.created_at,i.id) FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS order_items FROM public.orders o WHERE o.tracking_token=$1 LIMIT 1`,[token]);const order=rows?.[0];if(!order)return res.status(404).json({error:"Заказ не найден"});res.json({order});}catch(error){console.error("GET /api/orders/:token:",error);res.status(500).json({error:"Не удалось загрузить заказ"})}});
 
 app.post("/api/orders/:id/accept",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim();if(!id)return res.status(400).json({error:"Invalid order id"});const {rows:existingRows}=await query(`SELECT id,status,external_id,updated_at FROM public.orders WHERE id=$1::uuid LIMIT 1`,[id]);const existing=existingRows?.[0];if(!existing)return res.status(404).json({error:"Заказ не найден"});if(existing.status==="accepted")return res.json({ok:true,order:existing,alreadyAccepted:true});if(existing.status!=="new")return res.status(409).json({error:"Заказ уже изменил статус",order:existing});const {rows}=await query(`UPDATE public.orders SET status='accepted',updated_at=now() WHERE id=$1::uuid AND status='new' RETURNING id,status,external_id,updated_at`,[id]);const order=rows?.[0];if(!order){const {rows:currentRows}=await query(`SELECT id,status,external_id,updated_at FROM public.orders WHERE id=$1::uuid LIMIT 1`,[id]);const current=currentRows?.[0];if(current?.status==="accepted")return res.json({ok:true,order:current,alreadyAccepted:true});return res.status(409).json({error:"Заказ уже изменил статус",order:current||null});}return res.json({ok:true,order});}catch(error){console.error("POST /api/orders/:id/accept:",error);return res.status(500).json({error:"Не удалось принять заказ"})}});
 
-app.patch("/api/orders/:id/status",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim(),status=String(req.body?.status||"").trim(),allowed=new Set(["new","accepted","preparing","ready","cancelled"]);if(!id||!allowed.has(status))return res.status(400).json({error:"Invalid status"});const {rows}=await query(`UPDATE public.orders SET status=$2,updated_at=now() WHERE id=$1::uuid RETURNING id,status,updated_at`,[id,status]);if(!rows?.[0])return res.status(404).json({error:"Заказ не найден"});res.json({ok:true,order:rows[0]});}catch(error){console.error("PATCH /api/orders/:id/status:",error);res.status(500).json({error:"Не удалось обновить статус заказа"})}});
+app.patch("/api/orders/:id/status",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim(),status=String(req.body?.status||"").trim(),allowed=new Set(["new","accepted","preparing","ready","cancelled"]);if(!id||!allowed.has(status))return res.status(400).json({error:"Invalid status"});const {rows}=await withTransaction(async client=>{const {rows:orders}=await client.query('SELECT customer_id FROM public.orders WHERE id=$1::uuid',[id]);if(orders[0]?.customer_id)await client.query("SELECT pg_advisory_xact_lock(hashtextextended('privacy:'||$1::text,0))",[orders[0].customer_id]);return client.query(`UPDATE public.orders SET status=$2,updated_at=now() WHERE id=$1::uuid RETURNING id,status,updated_at`,[id,status]);});if(!rows?.[0])return res.status(404).json({error:"Заказ не найден"});res.json({ok:true,order:rows[0]});}catch(error){console.error("PATCH /api/orders/:id/status:",error);res.status(500).json({error:"Не удалось обновить статус заказа"})}});
 
 app.listen(port, process.env.HOST, () => console.log(`Prilavok backend listening on ${port}`));

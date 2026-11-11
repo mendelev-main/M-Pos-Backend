@@ -5,7 +5,6 @@ export function validateLegalAcknowledgement(payload) {
   const legal=payload?.legal;
   if(legal?.version!==LEGAL_VERSION || legal?.acknowledged!==true)
     return {status:409,code:'LEGAL_VERSION_REQUIRED',error:'Ознакомьтесь с актуальными условиями оформления заказа'};
-  if(typeof payload.loyaltyOptIn!=='boolean')return {status:400,error:'Укажите выбор участия в программе лояльности'};
   return null;
 }
 export function createPrivacyService({query,phoneVerification,normalizePhone}) {
