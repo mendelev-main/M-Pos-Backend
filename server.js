@@ -815,6 +815,23 @@ app.get("/api/orders/:token",async(req,res)=>{try{const token=String(req.params.
 
 app.post("/api/orders/:id/accept",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim();if(!id)return res.status(400).json({error:"Invalid order id"});const {rows:existingRows}=await query(`SELECT id,status,external_id,updated_at FROM public.orders WHERE id=$1::uuid LIMIT 1`,[id]);const existing=existingRows?.[0];if(!existing)return res.status(404).json({error:"Заказ не найден"});if(existing.status==="accepted")return res.json({ok:true,order:existing,alreadyAccepted:true});if(existing.status!=="new")return res.status(409).json({error:"Заказ уже изменил статус",order:existing});const {rows}=await query(`UPDATE public.orders SET status='accepted',updated_at=now() WHERE id=$1::uuid AND status='new' RETURNING id,status,external_id,updated_at`,[id]);const order=rows?.[0];if(!order){const {rows:currentRows}=await query(`SELECT id,status,external_id,updated_at FROM public.orders WHERE id=$1::uuid LIMIT 1`,[id]);const current=currentRows?.[0];if(current?.status==="accepted")return res.json({ok:true,order:current,alreadyAccepted:true});return res.status(409).json({error:"Заказ уже изменил статус",order:current||null});}return res.json({ok:true,order});}catch(error){console.error("POST /api/orders/:id/accept:",error);return res.status(500).json({error:"Не удалось принять заказ"})}});
 
-app.patch("/api/orders/:id/status",async(req,res)=>{try{if(!await requireDevice(req,res))return;const id=String(req.params.id||"").trim(),status=String(req.body?.status||"").trim(),allowed=new Set(["new","accepted","preparing","ready","cancelled"]);if(!id||!allowed.has(status))return res.status(400).json({error:"Invalid status"});const {rows}=await withTransaction(async client=>{const {rows:orders}=await client.query('SELECT customer_id FROM public.orders WHERE id=$1::uuid',[id]);if(orders[0]?.customer_id)await client.query("SELECT pg_advisory_xact_lock(hashtextextended('privacy:'||$1::text,0))",[orders[0].customer_id]);return client.query(`UPDATE public.orders SET status=$2,updated_at=now() WHERE id=$1::uuid RETURNING id,status,updated_at`,[id,status]);});if(!rows?.[0])return res.status(404).json({error:"Заказ не найден"});res.json({ok:true,order:rows[0]});}catch(error){console.error("PATCH /api/orders/:id/status:",error);res.status(500).json({error:"Не удалось обновить статус заказа"})}});
+app.patch("/api/orders/:id/status",async(req,res)=>{
+  try{
+    if(!await requireDevice(req,res))return;
+    const id=String(req.params.id||"").trim(),status=String(req.body?.status||"").trim();
+    if(!id||!new Set(["new","accepted","preparing","ready","cancelled"]).has(status))return res.status(400).json({error:"Invalid status"});
+    const result=await withTransaction(async client=>{
+      const {rows:initial}=await client.query('SELECT customer_id FROM public.orders WHERE id=$1::uuid',[id]);
+      if(initial[0]?.customer_id)await client.query("SELECT pg_advisory_xact_lock(hashtextextended('privacy:'||$1::text,0))",[initial[0].customer_id]);
+      const {rows:current}=await client.query('SELECT status,web_loyalty FROM public.orders WHERE id=$1::uuid FOR UPDATE',[id]);
+      // A cancelled web quote has released stock and returned its gift. It cannot be reused.
+      if(current[0]?.web_loyalty&&['cancelled','canceled'].includes(current[0].status)&&status!=='cancelled')return {cancelled:true};
+      return client.query('UPDATE public.orders SET status=$2,updated_at=now() WHERE id=$1::uuid RETURNING id,status,updated_at',[id,status]);
+    });
+    if(result.cancelled)return res.status(409).json({error:'Отменённый заказ нельзя возобновить. Оформите новый заказ.'});
+    if(!result.rows?.[0])return res.status(404).json({error:"Заказ не найден"});
+    res.json({ok:true,order:result.rows[0]});
+  }catch(error){console.error("PATCH /api/orders/:id/status:",error);res.status(500).json({error:"Не удалось обновить статус заказа"});}
+});
 
 app.listen(port, process.env.HOST, () => console.log(`Prilavok backend listening on ${port}`));
