@@ -45,9 +45,9 @@ test('dashboard uses the verified phone, real memberships/balances, isolated pro
     assert.equal(user.name, 'Тестовый участник');
     assert.equal(user.membership_active, true);
     assert.deepEqual(user.programs.map(p => [p.name,p.progress,p.required_quantity]).sort(), [['Кофе в подарок',4,5],['Пицца в подарок',7,10]]);
-    assert.equal((await account.orders(session)).length, 1);
-    assert.equal((await account.orders(session))[0].items[0].name, 'Мой кофе');
-    assert.equal((await account.orders(otherSession))[0].external_id, 'private-other-order');
+    assert.equal((await account.orders(session)).orders.length, 1);
+    assert.equal((await account.orders(session)).orders[0].items[0].name, 'Мой кофе');
+    assert.equal((await account.orders(otherSession)).orders[0].external_id, 'private-other-order');
     assert.equal((await account.updateProfile(session, {name:'Новое имя',deliveryAddress:'ул. Тестовая, 12'})).user.name,'Новое имя');
     assert.equal(Object.hasOwn(await account.current(session),'birth_date'),false);
     assert.equal((await account.current(session)).delivery_address, 'ул. Тестовая, 12');

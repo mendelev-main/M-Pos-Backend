@@ -1,7 +1,7 @@
 (() => {
   const el = id => document.getElementById(id);
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-  let timer, expiresAt = 0, checking = false, currentUser = null, historyLoaded = false;
+  let timer, expiresAt = 0, checking = false, currentUser = null, historyLoaded = false, historyCursor = null, historyBusy = false;
   const message = text => { el('account-message').textContent = text; };
   async function api(path, body, method = 'POST') {
     const options = { cache: 'no-store', credentials: 'same-origin' };
@@ -28,6 +28,7 @@
 
   function renderUser(user) {
     currentUser = user;
+    if(el('account-loading'))el('account-loading').hidden=true;
     el('guest-view').hidden = !!user;
     el('member-view').hidden = !user;
     el('account-tagline').hidden = !!user;
@@ -36,7 +37,7 @@
       el('member-programs').textContent = '';
       el('member-orders').textContent = '';
       el('member-history').open = false;
-      historyLoaded = false;
+      historyLoaded = false;historyCursor=null;if(el('orders-more'))el('orders-more').hidden=true;
       return;
     }
     stop(); message('');
@@ -111,25 +112,30 @@
   el('address-form').addEventListener('submit', event => {
     event.preventDefault(); saveProfile('save-address', 'address-message', 'address-dialog', { deliveryAddress: el('profile-address').value });
   });
-  el('member-history').addEventListener('toggle', async () => {
-    if (!el('member-history').open || historyLoaded || !currentUser) return;
-    el('member-orders').textContent = 'Загружаем заказы…';
-    const expectedPhone = currentUser.phone;
-    try {
-      const { orders } = await api('orders');
-      if (currentUser?.phone !== expectedPhone) return;
-      const statuses = { new: 'Создан', accepted: 'Принят', in_work: 'Готовится', ready: 'Готов', delivering: 'В пути', completed: 'Завершён', paid: 'Оплачен', cancelled: 'Отменён', canceled: 'Отменён' };
-      el('member-orders').innerHTML = orders.length ? orders.map(order => `<article class="account-order"><div class="account-order-heading"><span>${escape(new Date(order.created_at).toLocaleDateString('ru-RU'))}</span><strong>${Number(order.total || 0).toFixed(2)} BYN</strong></div><div class="account-order-status">${escape(statuses[order.status] || 'Статус уточняется')}</div><p>${(order.items || []).map(item => `${escape(item.name)} × ${Number(item.quantity)}`).join('<br>') || 'Состав заказа недоступен'}</p></article>`).join('') : '<p>У вас пока нет онлайн-заказов.</p>';
-      historyLoaded = true;
-    } catch (error) { if (currentUser?.phone === expectedPhone) el('member-orders').textContent = error.message; }
-  });
+  async function loadOrders(append=false) {
+    if(historyBusy||!currentUser)return;
+    historyBusy=true;const expectedPhone=currentUser.phone,more=el('orders-more');
+    if(more)more.disabled=true;
+    if(!append)el('member-orders').textContent='Загружаем заказы…';
+    try{
+      const {orders,nextCursor}=await api('orders'+(append&&historyCursor?'?cursor='+encodeURIComponent(historyCursor):''));
+      if(currentUser?.phone!==expectedPhone)return;
+      const statuses={new:'Создан',accepted:'Принят',in_work:'Готовится',preparing:'Готовится',ready:'Готов',delivering:'В пути',completed:'Завершён',paid:'Оплачен',cancelled:'Отменён',canceled:'Отменён'};
+      const html=orders.map(order=>`<article class="account-order"><header class="account-order-heading"><div><small>${escape(order.external_id||'Онлайн-заказ')}</small><time>${escape(new Date(order.created_at).toLocaleString('ru-RU',{day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}))}</time></div><span class="account-order-status">${escape(statuses[order.status]||'Статус уточняется')}</span></header><p class="account-order-type">${escape(order.order_type||'Самовывоз')}</p><ul class="account-order-items">${(order.items||[]).map(item=>`<li><span>${escape(item.name)} <small>× ${Number(item.quantity)}</small></span><strong>${(Number(item.price)*Number(item.quantity)).toFixed(2)} BYN</strong></li>`).join('')}</ul><footer><span>Итого</span><strong>${Number(order.total||0).toFixed(2)} BYN</strong></footer></article>`).join('');
+      if(append)el('member-orders').insertAdjacentHTML('beforeend',html);else el('member-orders').innerHTML=html||'<p>У вас пока нет онлайн-заказов.</p>';
+      historyLoaded=true;historyCursor=nextCursor;if(more)more.hidden=!nextCursor;
+    }catch(error){if(currentUser?.phone===expectedPhone){if(!append)el('member-orders').textContent=error.message;else message(error.message);}}
+    finally{historyBusy=false;if(more)more.disabled=false;}
+  }
+  el('member-history').addEventListener('toggle',()=>{if(el('member-history').open&&!historyLoaded)void loadOrders();});
+  el('orders-more')?.addEventListener('click',()=>loadOrders(true));
   el('logout-button').addEventListener('click', async () => {
     el('logout-button').disabled = true;
     try { await api('logout', {}); reset(); await loadProfile(); }
     catch (error) { message(error.message); }
     finally { el('logout-button').disabled = false; }
   });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else if (!el('telegram-step').hidden) complete(); else if (currentUser) loadProfile().catch(error => message(error.message)); });
-  window.addEventListener('pageshow', event => { if (event.persisted) loadProfile().then(signedIn => { if (!signedIn) complete(); }).catch(error => message(error.message)); });
-  loadProfile().then(signedIn => { if (!signedIn) complete(); }).catch(error => message(error.message));
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else if (!el('telegram-step').hidden) complete(); else if (currentUser) loadProfile().catch(error => {if(el('account-loading'))el('account-loading').textContent='Не удалось загрузить кабинет. Обновите страницу.';message(error.message);}); });
+  window.addEventListener('pageshow', event => { if (event.persisted) loadProfile().then(signedIn => { if (!signedIn) complete(); }).catch(error => {if(el('account-loading'))el('account-loading').textContent='Не удалось загрузить кабинет. Обновите страницу.';message(error.message);}); });
+  loadProfile().then(signedIn => { if (!signedIn) complete(); }).catch(error => {if(el('account-loading'))el('account-loading').textContent='Не удалось загрузить кабинет. Обновите страницу.';message(error.message);});
 })();

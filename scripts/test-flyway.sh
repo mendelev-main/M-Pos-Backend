@@ -24,7 +24,7 @@ export MPOS_FLYWAY_ENV_FILE="$tmp/flyway.env" MPOS_DOCKER_NETWORK="$network"
 bash "$root/scripts/flyway.sh" migrate
 bash "$root/scripts/flyway.sh" migrate
 bash "$root/scripts/flyway.sh" validate
-test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 12
+test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 14
 test "$(sql -Atc "SELECT count(*) FROM information_schema.columns WHERE table_name='orders' AND column_name LIKE 'delivery_tariff_%'")" = 3
 
 test "$(sql -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('customer_account_challenges','customer_account_sessions')")" = 2
@@ -48,7 +48,7 @@ sed -i 's@/mpos$@/legacy@' "$tmp/flyway.env"
 if bash "$root/scripts/flyway.sh" migrate > "$tmp/unbaselined.log" 2>&1; then echo 'Unsafe automatic baseline' >&2; exit 1; fi
 bash "$root/scripts/flyway.sh" baseline-v3-reviewed
 bash "$root/scripts/flyway.sh" migrate
-test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 9
+test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 11
 
 # A changed applied migration fails validation; no automatic repair is allowed.
 mkdir -p "$tmp/release/scripts" "$tmp/release/db/migrations"
@@ -58,8 +58,8 @@ cp "$root/db/migrations/"*.sql "$tmp/release/db/migrations/"
 sed -i 's/Delivery tariffs/Changed delivery tariffs/' "$tmp/release/db/migrations/004_delivery_tariffs.sql"
 if bash "$tmp/release/scripts/flyway.sh" validate > "$tmp/checksum.log" 2>&1; then echo 'Checksum mismatch was accepted' >&2; exit 1; fi
 cp "$root/db/migrations/004_delivery_tariffs.sql" "$tmp/release/db/migrations/"
-printf 'BEGIN;\nCREATE TABLE rollback_probe(id integer);\nSELECT 1/0;\nCOMMIT;\n' > "$tmp/release/db/migrations/013_failure.sql"
+printf 'BEGIN;\nCREATE TABLE rollback_probe(id integer);\nSELECT 1/0;\nCOMMIT;\n' > "$tmp/release/db/migrations/999_failure.sql"
 if bash "$tmp/release/scripts/flyway.sh" migrate > "$tmp/failure.log" 2>&1; then echo 'Broken migration succeeded' >&2; exit 1; fi
 test "$(sql -Atc "SELECT to_regclass('public.rollback_probe') IS NULL")" = t
-test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE version='013'")" = 0
+test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE version='999'")" = 0
 echo 'Flyway/PostgreSQL checks passed: fresh DB, repeat, legacy baseline, checksum rejection, transactional rollback.'
