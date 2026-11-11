@@ -10,8 +10,10 @@ import {createPhoneVerificationService} from '../phone-verification.js';
 import {validateLegalAcknowledgement} from '../privacy-service.js';
 import {LEGAL_VERSION} from '../legal-documents.js';
 import '../public/order-validation.js';
+import {applyLoyaltyReceipt} from '../loyalty-sales.js';
+import {validateLoyaltyAllocation} from '../loyalty-allocation.js';
 
-test('Android payment snapshot earns once, excludes cheapest gift, restores cancellation, and checkout retries are atomic',async()=>{
+test('receipt earns once across both Android messages, excludes free gifts, and restores cancellation',async()=>{
  const db=new PGlite({extensions:{pgcrypto}});
  try{
   await db.exec('CREATE ROLE mpos_app');const name=(await db.query('SELECT current_database() AS n')).rows[0].n;
@@ -27,13 +29,21 @@ test('Android payment snapshot earns once, excludes cheapest gift, restores canc
   const {normalizePhone,validate:validateOrderContact}=globalThis.OrderValidation,account=createCustomerAccount({query,withTransaction,normalizePhone}),verification=createPhoneVerificationService(query,normalizePhone);
   const checkout=createCheckoutService({query,withTransaction,normalizePhone,validateOrderContact,phoneVerification:verification,resolveAccount:account.identity,validateLegal:validateLegalAcknowledgement,manualDelivery:true,autoEnroll:true});
   const payload=()=>({customerName:'Test',phone,legal:{version:LEGAL_VERSION,acknowledged:true},requestId:randomUUID(),items:[{productId:cheap.id,quantity:1},{productId:expensive.id,quantity:1}]});
+  const receipt=async(oid,items)=>{
+    const order=(await query('SELECT customer_id FROM orders WHERE id=$1',[oid])).rows[0];
+    const membership=(await query('SELECT version FROM loyalty_memberships WHERE customer_id=$1',[order.customer_id])).rows[0];
+    const programs=[{id:p,required_quantity:5,reward_quantity:1,loyalty_earning_products:[{product_id:'cheap'},{product_id:'expensive'}]}];
+    const allocation=validateLoyaltyAllocation({items,programs});
+    return withTransaction(client=>applyLoyaltyReceipt({query:client.query,customerId:order.customer_id,orderId:'receipt-'+oid,programs,allocation,membership,occurredAt:new Date().toISOString()}));
+  };
   const first=await checkout.create(payload(),session);assert.equal(first.status,'ORDER_CREATED');assert.equal((await account.current(session)).membership_active,true);
-  assert.equal((await account.current(session)).programs[0].progress,0);await snapshot([first.orderId]);assert.equal((await account.current(session)).programs[0].progress,2);await snapshot([first.orderId]);assert.equal((await account.current(session)).programs[0].progress,2);
-  await query("INSERT INTO loyalty_ledger(customer_id,program_id,operation_type,progress_delta,reward_delta,idempotency_key) VALUES($1,$2,'MANUAL_ADJUSTMENT',-2,1,'seed-reward')",[(await account.current(session)).customer_id,p]);
+  assert.equal((await account.current(session)).programs[0].progress,0);await snapshot([first.orderId]);assert.equal((await account.current(session)).programs[0].progress,0);const firstItems=[{productId:'cheap',quantity:1,unitPrice:3}];await receipt(first.orderId,firstItems);assert.equal((await account.current(session)).programs[0].progress,1);await snapshot([first.orderId]);assert.equal((await receipt(first.orderId,firstItems))[0].duplicate,true);assert.equal((await account.current(session)).programs[0].progress,1);
+  await query("INSERT INTO loyalty_ledger(customer_id,program_id,operation_type,progress_delta,reward_delta,idempotency_key) VALUES($1,$2,'MANUAL_ADJUSTMENT',-1,1,'seed-reward')",[(await account.current(session)).customer_id,p]);
   const data={...payload(),items:[{productId:cheap.id,quantity:2},{productId:expensive.id,quantity:1}],orderType:'Доставка',address:'ул. Тестовая, 1',giftProgramIds:[p]};const order=await checkout.create(data,session);assert.equal(order.status,'ORDER_CREATED');assert.equal((await checkout.create(data,session)).duplicate,true);
   const stored=(await query('SELECT * FROM orders WHERE id=$1',[order.orderId])).rows[0];assert.equal(Number(stored.total),10);assert.equal(Number(stored.discount_total),3);assert.equal(stored.delivery_fee_pending,true);
   const free=(await query('SELECT * FROM order_items WHERE order_id=$1 AND is_loyalty_reward',[order.orderId])).rows[0];assert.equal(free.product_id,cheap.id);assert.equal(Number(free.price),0);
-  assert.equal((await account.current(session)).programs[0].rewards,0);const competing=await checkout.create({...payload(),giftProgramIds:[p]},session);assert.equal(competing.status,409);assert.equal((await query('SELECT count(*)::int AS n FROM orders')).rows[0].n,2);await snapshot([order.orderId]);assert.equal((await account.current(session)).programs[0].progress,2);
+  assert.equal((await account.current(session)).programs[0].rewards,0);const competing=await checkout.create({...payload(),giftProgramIds:[p]},session);assert.equal(competing.status,409);assert.equal((await query('SELECT count(*)::int AS n FROM orders')).rows[0].n,2);const paidItems=[{productId:'cheap',quantity:1,unitPrice:3},{productId:'cheap',quantity:1,unitPrice:0},{productId:'expensive',quantity:1,unitPrice:7}];await receipt(order.orderId,paidItems);await snapshot([order.orderId]);assert.equal((await receipt(order.orderId,paidItems))[0].duplicate,true);assert.equal((await account.current(session)).programs[0].progress,2);
+  await query('SELECT public.apply_single_reward_reversal($1,$2)',[(await account.current(session)).customer_id,'receipt-'+order.orderId]);
   await query("UPDATE orders SET status='cancelled' WHERE id=$1",[order.orderId]);const restored=(await account.current(session)).programs[0];assert.equal(restored.rewards,1);assert.equal(restored.progress,0);
   const count=(await query('SELECT count(*)::int AS n FROM loyalty_ledger')).rows[0].n;await query("UPDATE orders SET status='cancelled' WHERE id=$1",[order.orderId]);await snapshot([order.orderId]);assert.equal((await query('SELECT count(*)::int AS n FROM loyalty_ledger')).rows[0].n,count);
   const rejected=await checkout.create({...payload(),giftProgramIds:[p],items:[{productId:cheap.id,quantity:0.5}]},session);assert.equal(rejected.status,409);
@@ -46,7 +56,7 @@ test('Android payment snapshot earns once, excludes cheapest gift, restores canc
   const guestData={...payload(),phone:'+375290000002',loyaltyOptIn:false};const guest=await checkout.create(guestData);
   assert.equal(guest.status,'PENDING');const vt=new URL(guest.telegramUrl).searchParams.get('start');await verification.confirm(vt,guestData.phone,'123457');const guestOrder=await checkout.finalizeByVerificationToken(vt);assert.equal(guestOrder.ok,true);
   assert.equal((await query('SELECT public.loyalty_membership_active($1) AS active',[guestOrder.customerId])).rows[0].active,true);
-  assert.equal(Number((await query('SELECT progress FROM public.loyalty_balance($1,$2)',[guestOrder.customerId,p])).rows[0].progress),0);await snapshot([guestOrder.orderId]);assert.equal(Number((await query('SELECT progress FROM public.loyalty_balance($1,$2)',[guestOrder.customerId,p])).rows[0].progress),2);
+  assert.equal(Number((await query('SELECT progress FROM public.loyalty_balance($1,$2)',[guestOrder.customerId,p])).rows[0].progress),0);await snapshot([guestOrder.orderId]);await receipt(guestOrder.orderId,[{productId:'cheap',quantity:1,unitPrice:3},{productId:'expensive',quantity:1,unitPrice:7}]);assert.equal(Number((await query('SELECT progress FROM public.loyalty_balance($1,$2)',[guestOrder.customerId,p])).rows[0].progress),2);
   // Cursor history is bounded, stable on equal timestamps, and isolated by verified phone.
   for(let i=0;i<9;i++)await query('INSERT INTO orders(phone,external_id) VALUES($1,$2)',[phone,'page-'+i]);
   let cursor=null,ids=[];do{const page=await account.orders(session,cursor);assert.ok(page.orders.length<=5);ids.push(...page.orders.map(x=>x.id));cursor=page.nextCursor;}while(cursor);assert.equal(new Set(ids).size,ids.length);assert.equal(ids.length,12);
