@@ -14,14 +14,20 @@ Stock is reserved for the original total quantities before paid/free lines are
 split. Gift redemption, lines and the discounted order commit together.
 Cancellation reverses the linked ledger entries idempotently.
 
-M-POS-Android imports `order_items.price`, including zero. Its BackendRuntime sends
-paid web order UUIDs as `settledWebOrderIds` with a new availability snapshot,
-after the local sale exists. The backend records payment once, earns only on
-non-gift quantities, and skips cancelled orders or a membership changed since
-checkout. Retries/newer snapshots do not earn twice. Existing historical orders
-are excluded through `orders.web_loyalty`. This does not add synchronization of
-Android receipt refunds or edits to imported receipts; those are not included in
-the current paid-ID protocol.
+M-POS-Android imports `order_items.price`, including zero. Inventory snapshots
+carry `settledWebOrderIds` and only release reservations / record payment time.
+Migration 015 removes earning from that path: current native Android already
+sends the committed receipt separately to `/api/loyalty/sales`. Running both
+handlers earned twice because their identities were web UUID vs receipt UUID.
+
+The durable receipt is now the sole source of earning, keyed by receipt and
+program. `items[].unitPrice` from the immutable native checkout snapshot makes
+already free website lines non-earning; POS reward allocations are also excluded,
+including from overlapping programs. Gift units cannot be redeemed again. Old
+clients without prices keep their previous receipt semantics and require the
+Android update to distinguish already free website lines. Existing outbox bodies
+and historical ledger entries are not rewritten. Unknown duplicate historical
+balances require an audit linking the specific sale before correction.
 
 Delivery orders have `delivery_fee_pending=true`, provisional goods-only total,
 and an administrator pricing label. The administrator must agree the delivery
@@ -33,7 +39,7 @@ cursor with database timestamp precision, five rows plus one lookahead. There is
 no offset or unbounded history response. Initial account HTML hides guest/member
 views until the session request resolves.
 
-Migrations 013–014 are additive and preserve earlier migration checksums. Published
+Migrations 013–015 are additive and preserve earlier migration checksums. Published
 terms are archived under edition 2026-11-11.1. Tests cover native payment replay,
 cheapest gifts, cancellation, guests, enrollment and cursor isolation; Flyway CI
 also checks fresh install, upgrade, checksum rejection and rollback.

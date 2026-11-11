@@ -1,3 +1,4 @@
+import { applyLoyaltyReceipt } from './loyalty-sales.js';
 import { verifyPosAdministrationPassword } from './pos-administration-auth.js';
 import { mountCustomerAccount } from './customer-account.js';
 import { createLoyaltyBalanceAdjustment } from './loyalty-adjustment.js';
@@ -758,16 +759,7 @@ app.post("/api/loyalty/sales",async(req,res)=>{
     catch(e){return res.status(409).json({error:"Invalid loyalty reward allocation",reason:String(e.message||e)})}
     await withTransaction(async client=>{
     const query=client.query.bind(client);
-    await query("SELECT pg_advisory_xact_lock(hashtextextended('privacy:'||$1::text,0))",[customerId]);
-    for(const p of programs){
-      const earningIds=new Set((p.loyalty_earning_products||[]).map(x=>String(x.product_id)));
-      const earned=[...allocation.paidByProduct].filter(([productId])=>earningIds.has(productId)).reduce((sum,[,quantity])=>sum+quantity,0);
-      const redeem=allocation.allocatedByProgram.get(String(p.id))||0;
-      if(!earned&&!redeem)continue;
-      const key=loyaltyIdempotencyKey(orderId,p.id,"sale");
-      const {rows}=await query(`SELECT * FROM public.apply_loyalty_sale($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9::bigint,$10::timestamptz)`,[customerId,p.id,key,orderId,earned,redeem,p.required_quantity,p.reward_quantity,membership.version,req.body?.occurredAt||null]);const x=rows?.[0];
-      events.push({programId:p.id,earned,redeemed:Number(x?.redeemed||0),granted:Number(x?.granted||0),progress:Number(x?.progress||0),rewards:Number(x?.rewards||0),duplicate:Boolean(x?.duplicate)});
-    }
+    events.push(...await applyLoyaltyReceipt({query,customerId,orderId,programs,allocation,membership,occurredAt:req.body?.occurredAt}));
     await query(`UPDATE public.customers SET last_purchase_at=now(),updated_at=now() WHERE id=$1::uuid`,[customerId]);
     });
     const finalPrograms=await customerLoyalty(customerId);

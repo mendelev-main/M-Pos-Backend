@@ -29,3 +29,16 @@ test("allocation must use reward products and exactly match redemption",()=>{
   assert.throws(()=>validateLoyaltyAllocation({items:[{productId:"drink",quantity:1}],programs:[programs[0]],redemptions:{a:1},rewardAllocations:{a:[{productId:"drink",quantity:1}]}}),/INVALID_REWARD_ALLOCATION/);
   assert.throws(()=>validateLoyaltyAllocation({items:[{productId:"pizza",quantity:1}],programs:[programs[0]],redemptions:{a:1},rewardAllocations:{a:[]}}),/INVALID_REWARD_ALLOCATION/);
 });
+
+test('already free website units never earn and never consume a second reward',()=>{
+ const result=validateLoyaltyAllocation({items:[{productId:'pizza',quantity:1,unitPrice:20},{productId:'pizza',quantity:1,unitPrice:0}],programs:[programs[0]]});
+ assert.equal(result.paidByProduct.get('pizza'),1);assert.equal(result.allocatedByProgram.get('a'),0);
+ const free=validateLoyaltyAllocation({items:[{productId:'pizza',quantity:1,unitPrice:'0.00'}],programs:[programs[0]]});assert.equal(free.paidByProduct.get('pizza'),0);
+ assert.throws(()=>validateLoyaltyAllocation({items:[{productId:'pizza',quantity:1,unitPrice:0}],programs:[programs[0]],redemptions:{a:1},rewardAllocations:{a:[{productId:'pizza',quantity:1}]}}),/REWARD_ITEM_REUSED/);
+});
+
+test('receipt prices must be valid; explicit gift units cannot earn in any overlapping program',()=>{
+ for(const price of [null,'invalid',-1])assert.throws(()=>validateLoyaltyAllocation({items:[{productId:'pizza',quantity:1,unitPrice:price}]}),/INVALID_LOYALTY_PRICE/);
+ const result=validateLoyaltyAllocation({items:[{productId:'pizza',quantity:1,isLoyaltyReward:true},{productId:'pizza',quantity:2,unitPrice:20}],programs,redemptions:{a:1},rewardAllocations:{a:[{productId:'pizza',quantity:1}]}});
+ assert.equal(result.paidByProduct.get('pizza'),1);assert.equal(result.allocatedByProgram.get('a'),1);
+});

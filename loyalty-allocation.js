@@ -4,12 +4,16 @@ function positiveInteger(value) {
 }
 
 export function validateLoyaltyAllocation({ items = [], programs = [], redemptions = {}, rewardAllocations = {} }) {
-  const originalByProduct = new Map();
+  const originalByProduct = new Map(), freeByProduct = new Map();
   for (const item of items) {
     const productId = String(item?.productId || "");
     const quantity = positiveInteger(item?.quantity ?? item?.qty);
     if (!productId || !quantity) throw new Error("INVALID_LOYALTY_ITEMS");
     originalByProduct.set(productId, (originalByProduct.get(productId) || 0) + quantity);
+    if(item.unitPrice!==undefined&&(item.unitPrice===null||!Number.isFinite(Number(item.unitPrice))||Number(item.unitPrice)<0))throw new Error("INVALID_LOYALTY_PRICE");
+    if(item.isLoyaltyReward!==undefined&&typeof item.isLoyaltyReward!=="boolean")throw new Error("INVALID_LOYALTY_REWARD_FLAG");
+    if(item.isLoyaltyReward===true||item.unitPrice!==undefined&&Number(item.unitPrice)===0)
+      freeByProduct.set(productId,(freeByProduct.get(productId)||0)+quantity);
   }
 
   const allocatedByProduct = new Map();
@@ -24,7 +28,7 @@ export function validateLoyaltyAllocation({ items = [], programs = [], redemptio
       let remaining = requested;
       for (const productId of originalByProduct.keys()) {
         if (!allowed.has(productId) || !remaining) continue;
-        const available = (originalByProduct.get(productId) || 0) - (allocatedByProduct.get(productId) || 0);
+        const available = (originalByProduct.get(productId) || 0) - (freeByProduct.get(productId) || 0) - (allocatedByProduct.get(productId) || 0);
         const quantity = Math.min(available, remaining);
         if (quantity > 0) rows.push({ productId, quantity });
         remaining -= quantity;
@@ -46,10 +50,11 @@ export function validateLoyaltyAllocation({ items = [], programs = [], redemptio
     if (!programs.some(program => String(program.id) === String(programId))) throw new Error("INVALID_REWARD_ALLOCATION");
   }
   for (const [productId, quantity] of allocatedByProduct) {
-    if (quantity > (originalByProduct.get(productId) || 0)) throw new Error("REWARD_ITEM_REUSED");
+    if (quantity + (freeByProduct.get(productId) || 0) > (originalByProduct.get(productId) || 0)) throw new Error("REWARD_ITEM_REUSED");
   }
 
   const paidByProduct = new Map(originalByProduct);
+  for(const [productId,quantity] of freeByProduct)paidByProduct.set(productId,paidByProduct.get(productId)-quantity);
   for (const [productId, quantity] of allocatedByProduct) paidByProduct.set(productId, paidByProduct.get(productId) - quantity);
   return { paidByProduct, allocatedByProgram };
 }
