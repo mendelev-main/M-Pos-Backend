@@ -515,7 +515,8 @@ app.get("/api/menu/availability",async(_req,res)=>{
 app.get("/api/menu", async (req, res) => {
   try {
     const menuSurface = String(req.query?.surface || "").toLowerCase() === "menu";
-    const visibilityColumn = menuSurface ? "visible_in_menu" : "available_online";
+    const combinedSurface = String(req.query?.surface || "").toLowerCase() === "combined";
+    const visibilityColumn = combinedSurface ? "(visible_in_menu OR available_online)" : menuSurface ? "visible_in_menu" : "available_online";
 
     const { rows: categories } = await query(`
       SELECT id, name, color, sort_order, is_active, external_id
