@@ -9,7 +9,7 @@
 }
 
 html{background:#08090b;}
-body{min-height:100%;overflow-x:hidden;background:#08090b!important;}
+body{min-height:100%;overflow-x:clip;background:#08090b!important;}
 body::before{display:none!important;}
 
 .site-top,.top{
@@ -97,3 +97,8 @@ html{overflow-y:scroll;scrollbar-gutter:stable}
 .site-nav a.active,.nav a.active{background:#f5f5f2!important;color:#0b0c0e!important}
 @media(max-width:560px){.site-top,.top{min-height:69px!important}.site-topin,.topin{min-height:46px!important;gap:12px!important}.site-nav a,.nav a{height:36px!important;padding:0 12px!important;font-size:13px!important}.site-nav a.account-link,.nav a.account-link{width:36px!important;padding:0!important}}
 @media(max-width:360px){.site-topin,.topin{gap:8px!important}.site-nav a,.nav a{font-size:12px!important;padding:0 9px!important}}
+
+/* Native two-axis gestures; clip the page without creating a body scroll container. */
+.cats,.categories{position:sticky;top:env(safe-area-inset-top,0px);z-index:15;display:flex;overflow-x:auto;overflow-y:hidden;touch-action:pan-x pan-y pinch-zoom;overscroll-behavior-x:contain;scroll-behavior:auto;-webkit-overflow-scrolling:touch;background:#08090b;scrollbar-width:none}
+.cats::-webkit-scrollbar,.categories::-webkit-scrollbar{display:none}
+.cats .cat,.categories .cat{flex:0 0 auto}
