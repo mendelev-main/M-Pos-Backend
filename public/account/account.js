@@ -27,13 +27,14 @@
   }
 
   function renderUser(user) {
+    if (currentUser?.phone !== user?.phone) clearQr();
     currentUser = user;
     if(el('account-loading'))el('account-loading').hidden=true;
     el('guest-view').hidden = !!user;
     el('member-view').hidden = !user;
     el('account-tagline').hidden = !!user;
     if (!user) {
-      el('member-qr').removeAttribute('src');
+      clearQr();
       el('member-programs').textContent = '';
       el('member-orders').textContent = '';
       el('member-history').open = false;
@@ -84,7 +85,30 @@
   });
   el('check-login').addEventListener('click', () => complete(true));
   el('restart-login').addEventListener('click', () => { reset(); message(''); el('login-button').focus(); });
-  el('member-qr').addEventListener('error', () => { el('qr-error').hidden = false; });
+  let qrOverflow = '';
+  function clearQr() {
+    if (el('qr-dialog').open) el('qr-dialog').close();
+    el('member-qr').removeAttribute('src');
+    el('expanded-qr').removeAttribute('src');
+    el('open-qr').disabled = true;
+  }
+  function qrFailed() { clearQr(); el('qr-error').hidden = false; }
+  el('member-qr').addEventListener('load', () => { el('open-qr').disabled = !currentUser; el('qr-error').hidden = true; });
+  el('member-qr').addEventListener('error', qrFailed);
+  el('expanded-qr').addEventListener('error', qrFailed);
+  el('open-qr').addEventListener('click', () => {
+    if (!currentUser || el('open-qr').disabled) return;
+    const source = el('member-qr').getAttribute('src');
+    if (!source) return;
+    el('expanded-qr').src = source;
+    qrOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    el('qr-dialog').showModal();
+    el('close-qr').focus();
+  });
+  el('close-qr').addEventListener('click', () => el('qr-dialog').close());
+  el('qr-dialog').addEventListener('click', event => { if (event.target === el('qr-dialog')) el('qr-dialog').close(); });
+  el('qr-dialog').addEventListener('close', () => { document.body.style.overflow = qrOverflow; el('expanded-qr').removeAttribute('src'); if (currentUser) el('open-qr').focus(); });
   function openProfile(focus) {
     if (!currentUser) return;
     el('profile-name').value = currentUser.name || '';
