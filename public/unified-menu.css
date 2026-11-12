@@ -1,0 +1,34 @@
+/* Venue-only actions retain the dimensions of the existing add button. */
+.add.venue-button{background:#eee0a9!important;color:#302918!important;border-color:#eee0a9!important;box-shadow:inset 0 1px 0 #fff5!important}
+.add.venue-button:hover{background:#f5e8b9!important;border-color:#f5e8b9!important}
+.cats{background:transparent!important}
+
+/* The same moving pill is used for fulfilment and payment. */
+.switches{--choice-fill:#b99ae5;--choice-ink:#2c1c40;--choice-rgb:173,137,224;display:flex;position:relative;isolation:isolate;gap:5px;padding:4px;border:1px solid rgba(var(--choice-rgb),.24);border-radius:999px;background:rgba(var(--choice-rgb),.075);box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 10px 36px rgba(0,0,0,.18);transition:background-color .4s ease,border-color .4s ease}
+.switches.is-delivery,.payment-switch{--choice-fill:#9bceab;--choice-ink:#153622;--choice-rgb:124,190,147}
+.payment-switch.is-delivery{--choice-fill:#b99ae5;--choice-ink:#332347;--choice-rgb:173,137,224}
+.switches .switch{position:relative;z-index:1;flex:1;display:flex;align-items:center;justify-content:center;gap:8px;height:42px;padding:0 12px;border:0;background:transparent;color:#92979f;font-size:14px;font-weight:650;line-height:20px;text-align:center;transition:color .35s ease;white-space:nowrap}
+.switches .switch.active{background:transparent;color:var(--choice-ink)}
+.switches .switch:active{transform:none}
+.switches .switch svg{width:19px;height:19px;flex:none}
+.fulfilment-thumb{position:absolute;z-index:0;left:4px;top:4px;bottom:4px;width:calc((100% - 13px)/2);border-radius:999px;background:var(--choice-fill);box-shadow:0 0 16px rgba(var(--choice-rgb),.1);transition:transform .35s cubic-bezier(.22,1,.36,1),background-color .4s ease,box-shadow .4s ease}
+.switches.is-delivery .fulfilment-thumb{transform:translateX(calc(100% + 5px))}
+.payment-section{margin-top:10px;margin-bottom:0}
+.payment-section[hidden],#deliveryTariffChoices{display:none!important}
+.payment-switch{width:100%}
+.payment-switch .card-coming-soon{position:relative;opacity:1;cursor:default}
+.payment-switch .card-coming-soon>svg,.payment-switch .card-coming-soon>span:not(.coming-soon-badge){filter:blur(2px);opacity:.55;user-select:none}
+.payment-switch .coming-soon-badge{position:absolute;z-index:2;top:50%;left:50%;transform:translate(-50%,-50%);display:block;padding:4px 10px;border:1px solid rgba(198,177,231,.28);border-radius:999px;background:#30283e;color:#e7daf8;font-size:10px;font-weight:650;line-height:1.2;letter-spacing:.01em;white-space:nowrap}
+
+.actions.qty{gap:0;border:1px solid rgba(255,255,255,.09);background:#181b20;border-radius:999px;min-height:42px;flex:none;overflow:hidden;align-self:center}
+.actions.qty button{border:0;background:transparent;width:40px;height:40px;color:#f3f3ef;font-size:20px}
+.actions.qty b{font-size:14px;min-width:28px;text-align:center;font-variant-numeric:tabular-nums}
+.actions.qty button:disabled{opacity:.3}
+.venue-button:focus-visible,.switches .switch:focus-visible,.actions button:focus-visible,.venue-notice button:focus-visible{outline:2px solid #f5f5f2;outline-offset:3px}
+.notice-backdrop{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:22px;background:#0009;backdrop-filter:blur(12px)}
+.notice-backdrop[hidden]{display:none}
+.venue-notice{width:min(420px,100%);padding:50px 26px 36px;position:relative;background:#111318;border:1px solid #ffffff20;border-radius:27px;box-shadow:0 24px 80px #0006}
+.venue-notice h2{font-size:23px;line-height:1.3;letter-spacing:-.025em;margin:0;font-weight:650}
+.venue-notice button{position:absolute;right:12px;top:12px;width:34px;height:34px;border:1px solid #ffffff18;border-radius:50%;background:#1b1e24;color:#fff;font-size:23px}
+@media(max-width:560px){.actions.qty{width:104px;height:40px;min-height:40px;justify-content:space-between}.actions.qty button{width:36px;height:38px}.actions.qty b{min-width:24px;flex:1}.switches .switch{height:36px;font-size:13px;gap:7px}.switches .switch svg{width:18px;height:18px}.venue-notice h2{font-size:21px}.venue-notice{padding-left:23px;padding-right:23px}}
+@media(prefers-reduced-motion:reduce){.switches,.fulfilment-thumb,.switches .switch{transition:none}}
