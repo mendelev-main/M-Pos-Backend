@@ -142,7 +142,7 @@ export function mountCustomerAccount(app, dependencies) {
     try {
       const user = await account.current(cookie(req, 'mpos_account'));
       if (!user) return res.status(401).json({ error: 'Войдите в личный кабинет.' });
-      const svg = await QRCode.toString(user.phone, { type: 'svg', margin: 3, width: 192, errorCorrectionLevel: 'M', color: { dark: '#08090b', light: '#ffffff' } });
+      const svg = await QRCode.toString(user.phone, { type: 'svg', margin: 4, width: 192, errorCorrectionLevel: 'M', color: { dark: '#08090b', light: '#ffffff' } });
       res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
       res.type('image/svg+xml').send(svg);
     } catch { res.status(503).json({ error: 'Не удалось загрузить QR-код.' }); }

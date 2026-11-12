@@ -50,3 +50,18 @@ test('signed-in dashboard hides guest promotions and renders the returned loyalt
   assert.match(get('member-programs').innerHTML,/Кофе &lt;script&gt;/);
   assert.equal((get('member-programs').innerHTML.match(/class="is-filled"/g)||[]).length,4);
 });
+
+test('QR enlargement waits for the image, restores scrolling, and clears on error or logout', async () => {
+  const elements=new Map();let user={phone:'+375290000099',name:'Тест',programs:[]};
+  const get=id=>{if(!elements.has(id))elements.set(id,{events:{},hidden:true,open:false,disabled:true,innerHTML:'',textContent:'',value:'',addEventListener(name,handler){this.events[name]=handler},getAttribute(name){return this[name]||null},removeAttribute(name){delete this[name]},focus(){},showModal(){this.open=true},close(){this.open=false;this.events.close?.()}});return elements.get(id)};
+  const context={document:{getElementById:get,hidden:false,body:{style:{overflow:'auto'}},addEventListener(){}},window:{addEventListener(){}},Date,setTimeout(){},clearTimeout(){},fetch:async url=>{if(url.endsWith('/logout'))user=null;return {ok:true,json:async()=>({user,status:'MISSING'})}}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/account/account.js'),'utf8'),context);
+  await new Promise(setImmediate);
+  get('open-qr').events.click();assert.equal(get('qr-dialog').open,false);
+  get('member-qr').events.load();get('open-qr').events.click();
+  assert.equal(get('qr-dialog').open,true);assert.equal(get('expanded-qr').src,'/api/account/qr');assert.equal(context.document.body.style.overflow,'hidden');
+  get('close-qr').events.click();assert.equal(get('qr-dialog').open,false);assert.equal(context.document.body.style.overflow,'auto');assert.equal(get('expanded-qr').src,undefined);
+  get('open-qr').events.click();get('expanded-qr').events.error();assert.equal(get('qr-dialog').open,false);assert.equal(get('qr-error').hidden,false);assert.equal(get('open-qr').disabled,true);assert.equal(get('member-qr').src,undefined);
+  get('member-qr').src='/api/account/qr';get('member-qr').events.load();get('open-qr').events.click();await get('logout-button').events.click();
+  assert.equal(get('qr-dialog').open,false);assert.equal(get('member-qr').src,undefined);assert.equal(get('expanded-qr').src,undefined);assert.equal(get('member-view').hidden,true);assert.equal(context.document.body.style.overflow,'auto');
+});
