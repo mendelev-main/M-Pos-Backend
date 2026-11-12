@@ -32,7 +32,6 @@
     if(el('account-loading'))el('account-loading').hidden=true;
     el('guest-view').hidden = !!user;
     el('member-view').hidden = !user;
-    el('account-tagline').hidden = !!user;
     if (!user) {
       clearQr();
       el('member-programs').textContent = '';
@@ -54,8 +53,8 @@
     renderUser(user);
     return !!user;
   }
-  async function complete(manual = false) {
-    if (checking || document.hidden && !manual) return;
+  async function complete() {
+    if (checking || document.hidden) return;
     checking = true; stop();
     try {
       const { status } = await api('complete', {});
@@ -63,8 +62,6 @@
       if (status === 'EXPIRED' || expiresAt && Date.now() >= expiresAt) { reset(); message('Время подтверждения истекло. Войдите ещё раз.'); return; }
       if (status === 'PENDING') {
         el('login-form').hidden = true; el('telegram-step').hidden = false;
-        el('telegram-link').hidden = !el('telegram-link').hasAttribute('href');
-        if (manual) message('Поделитесь номером в Telegram, затем вернитесь сюда.');
         timer = setTimeout(() => complete(), 3000);
       }
     } catch (error) { message(error.message); }
@@ -75,15 +72,13 @@
     try {
       const result = await api('start', {});
       expiresAt = Date.parse(result.expiresAt);
-      el('telegram-link').href = result.telegramUrl; el('telegram-link').hidden = false;
       el('login-form').hidden = true; el('telegram-step').hidden = false;
-      el('telegram-link').focus();
+      el('restart-login').focus();
       window.location.assign(result.telegramUrl);
       timer = setTimeout(() => complete(), 3000);
     } catch (error) { message(error.message); }
     finally { el('login-button').disabled = false; }
   });
-  el('check-login').addEventListener('click', () => complete(true));
   el('restart-login').addEventListener('click', () => { reset(); message(''); el('login-button').focus(); });
   let qrOverflow = '';
   function clearQr() {

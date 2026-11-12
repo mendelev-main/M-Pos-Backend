@@ -65,3 +65,14 @@ test('QR enlargement waits for the image, restores scrolling, and clears on erro
   get('member-qr').src='/api/account/qr';get('member-qr').events.load();get('open-qr').events.click();await get('logout-button').events.click();
   assert.equal(get('qr-dialog').open,false);assert.equal(get('member-qr').src,undefined);assert.equal(get('expanded-qr').src,undefined);assert.equal(get('member-view').hidden,true);assert.equal(context.document.body.style.overflow,'auto');
 });
+
+test('minimal Telegram pending screen restarts and completes automatically without a confirmation button', async () => {
+  const elements=new Map(),visibility={};let status='MISSING',user=null;
+  const get=id=>{assert.ok(!['account-tagline','telegram-link','check-login'].includes(id));if(!elements.has(id))elements.set(id,{hidden:true,open:false,value:'',innerHTML:'',textContent:'',addEventListener(event,handler){this[event]=handler},getAttribute(name){return this[name]||null},removeAttribute(name){delete this[name]},focus(){}});return elements.get(id)};
+  const c={document:{getElementById:get,hidden:false,addEventListener(name,handler){visibility[name]=handler}},window:{addEventListener(){},location:{assign(){}}},Date,setTimeout(){},clearTimeout(){},fetch:async url=>({ok:true,json:async()=>url.endsWith('/session')?{user}:url.endsWith('/complete')?{status}:{telegramUrl:'https://t.me/test_bot?start=example',expiresAt:new Date(Date.now()+300000).toISOString()}})};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/account/account.js'),'utf8'),c);await new Promise(setImmediate);
+  await get('login-form').submit({preventDefault(){}});assert.equal(get('login-form').hidden,true);assert.equal(get('telegram-step').hidden,false);
+  get('restart-login').click();assert.equal(get('login-form').hidden,false);assert.equal(get('telegram-step').hidden,true);
+  await get('login-form').submit({preventDefault(){}});status='PENDING';visibility.visibilitychange();await new Promise(setImmediate);assert.equal(get('telegram-step').hidden,false);
+  status='AUTHENTICATED';user={phone:'+375290000099',name:'Тест',programs:[]};visibility.visibilitychange();await new Promise(setImmediate);assert.equal(get('member-view').hidden,false);assert.equal(get('guest-view').hidden,true);
+});

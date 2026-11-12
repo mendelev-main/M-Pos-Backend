@@ -6,32 +6,27 @@
   <meta name="theme-color" content="#08090b">
   <title>Личный кабинет — Проект</title>
   <link rel="stylesheet" href="/guest-shell.css?v=unified-menu-20261112">
-  <link rel="stylesheet" href="/account/account.css?v=account-qr-20261113">
+  <link rel="stylesheet" href="/account/account.css?v=account-login-20261113">
   <link rel="stylesheet" href="/loyalty-cards.css?v=account-green-gifts-3">
   <script defer src="/loyalty-cards.js?v=account-green-gifts-3"></script>
-  <script defer src="/account/account.js?v=account-qr-20261113"></script>
+  <script defer src="/account/account.js?v=account-login-20261113"></script>
 </head>
 <body>
   <svg xmlns="http://www.w3.org/2000/svg" class="icon-symbols" aria-hidden="true"><symbol id="icon-user" viewBox="0 0 24 24"><circle cx="12" cy="7" r="3.5"/><path d="M4 22v-3a8 8 0 0 1 16 0v3"/></symbol><symbol id="icon-phone" viewBox="0 0 24 24"><path d="m7 3 3 5-3 3a17 17 0 0 0 6 6l3-3 5 3c-1 6-5 5-9 3A22 22 0 0 1 4 12C2 8 1 4 7 3Z"/></symbol><symbol id="icon-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="12" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4m-4 5v3"/></symbol><symbol id="icon-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></symbol><symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol><symbol id="icon-receipt" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="18" rx="3"/><rect x="8" y="2" width="8" height="5" rx="2"/><path d="M8 12h8m-8 5h8"/></symbol><symbol id="icon-gift" viewBox="0 0 24 24"><path d="M4 10h16v11H4ZM2 6h20v4H2Zm10 0v15"/><path d="M12 6C2 6 7-3 12 6Zm0 0c10 0 5-9 0 0Z"/></symbol></svg>
   <header class="site-top"><div class="site-topin"><a class="brand" href="/">Проект</a><nav class="site-nav" aria-label="Разделы"><a href="/menu/">Меню</a><a class="account-link active" href="/account/" aria-label="Личный кабинет" aria-current="page"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg></a></nav></div></header>
   <main class="account-shell">
-    <div class="account-intro"><h1>Личный кабинет</h1><p id="account-tagline" hidden>QR-карта, акции и заказы</p></div>
+    <div class="account-intro"><h1>Личный кабинет</h1></div>
     <p id="account-loading" role="status">Загружаем кабинет…</p>
     <div id="guest-view" class="account-layout" hidden>
       <section class="profile-panel" aria-labelledby="profile-title">
         <div class="profile-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="12" cy="8" r="3.5"/><path d="M4 22v-3a8 8 0 0 1 16 0v3"/></svg></div>
         <div id="guest-profile">
           <h2 id="profile-title">Войдите в кабинет</h2>
-          <p class="profile-copy">Ваша QR-карта, прогресс по акциям и история заказов — в одном месте.</p>
           <form id="login-form">
             <button class="primary-button" id="login-button" type="submit"><svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><path d="m21.4 3.4-3.2 16c-.2 1.1-.9 1.4-1.8.9l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.4-5 9.1-8.2c.4-.4-.1-.6-.6-.3L5.8 13.1 1 11.6c-1-.3-1-1 .2-1.4L20 3c.9-.3 1.6.2 1.4.4Z"/></svg>Войти через Telegram</button>
           </form>
           <div id="telegram-step" hidden>
-            <div class="pending-note"><span class="pending-dot"></span>Ждём подтверждения в Telegram</div>
-            <p class="profile-copy">Откройте бота, нажмите «Старт» и поделитесь своим номером телефона. Принимаем только номера +375.</p>
-            <a id="telegram-link" class="primary-button" target="_blank" rel="noopener noreferrer">Открыть Telegram</a>
-            <button type="button" class="text-button" id="check-login">Я подтвердил номер</button>
-            <button type="button" class="text-button muted" id="restart-login">Начать заново</button>
+            <button type="button" class="primary-button" id="restart-login">Начать заново</button>
           </div>
         </div>
       </section>
