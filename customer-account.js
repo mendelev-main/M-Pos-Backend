@@ -78,6 +78,22 @@ export function createCustomerAccount({ query, withTransaction, normalizePhone }
       ${entries.map(([column]) => `${column}=EXCLUDED.${column}`).join(',')},updated_at=now()`, [user.phone, ...entries.map(([,value]) => value)]);
     return { user: await current(session) };
   }
+  async function currentOrders(session, checkoutToken) {
+    const user = await identity(session);
+    const guest = validToken(checkoutToken) ? hash(checkoutToken) : null;
+    if (!user && !guest) return { orders: [], serverNow: new Date().toISOString() };
+    const { rows } = await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.total,o.created_at,
+      o.status_changed_at,o.accepted_at,o.ready_estimate,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('name',i.product_name,'quantity',i.quantity,'price',i.price) ORDER BY i.created_at,i.id)
+        FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS items
+      FROM public.orders o WHERE
+      (($1::text IS NOT NULL AND o.phone=$1) OR ($1::text IS NULL AND EXISTS (
+        SELECT 1 FROM public.checkout_sessions c WHERE c.token_hash=$2 AND c.order_id=o.id)))
+      AND (o.status IN ('new','accepted','preparing','in_work') OR
+        (o.status IN ('ready','cancelled','canceled') AND o.status_changed_at>now()-interval '30 minutes'))
+      ORDER BY o.created_at DESC,o.id DESC LIMIT 5`, [user?.phone || null, guest]);
+    return { orders: rows, serverNow: new Date().toISOString() };
+  }
   async function orders(session, cursor) {
     let before = null;
     if(cursor){try{before=JSON.parse(Buffer.from(String(cursor),"base64url").toString());if(!Array.isArray(before)||before.length!==2||!Number.isFinite(Date.parse(before[0]))||! /^[0-9a-f-]{36}$/i.test(before[1]))throw Error();}catch{return {error:"Обновите историю заказов.",status:400};}}
@@ -87,6 +103,8 @@ export function createCustomerAccount({ query, withTransaction, normalizePhone }
       COALESCE((SELECT jsonb_agg(jsonb_build_object('name',i.product_name,'quantity',i.quantity,'price',i.price) ORDER BY i.created_at,i.id)
         FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS items
       FROM public.orders o WHERE (o.phone=$1 OR ($2::uuid IS NOT NULL AND o.customer_id=$2::uuid))
+      AND o.status NOT IN ('new','accepted','preparing','in_work')
+      AND (o.status NOT IN ('ready','cancelled','canceled') OR o.status_changed_at<=now()-interval '30 minutes')
       AND ($3::timestamptz IS NULL OR (o.created_at,o.id)<($3::timestamptz,$4::uuid))
       ORDER BY o.created_at DESC,o.id DESC LIMIT 6`, [user.phone, user.customer_id,before?.[0]||null,before?.[1]||null]);
     const page=rows.slice(0,5),last=page.at(-1);
@@ -100,7 +118,7 @@ export function createCustomerAccount({ query, withTransaction, normalizePhone }
   async function logout(session) {
     if (validToken(session)) await query('DELETE FROM public.customer_account_sessions WHERE token_hash=$1', [hash(session)]);
   }
-  return { start, complete, current, identity, updateProfile, orders, logout };
+  return { start, complete, current, identity, updateProfile, orders, currentOrders, logout };
 }
 
 function cookie(req, name) {
@@ -130,6 +148,10 @@ export function mountCustomerAccount(app, dependencies) {
       const result = await account.updateProfile(cookie(req, 'mpos_account'), req.body);
       res.status(result.status || 200).json(result);
     } catch { res.status(503).json({ error: 'Не удалось сохранить профиль. Попробуйте ещё раз.' }); }
+  });
+  app.get('/api/account/current-orders', async (req, res) => {
+    try { res.json(await account.currentOrders(cookie(req, 'mpos_account'), cookie(req, 'mpos_checkout'))); }
+    catch { res.status(503).json({ error: 'Не удалось обновить текущий заказ.' }); }
   });
   app.get('/api/account/orders', async (req, res) => {
     try {

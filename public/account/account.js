@@ -28,7 +28,9 @@
 
   function renderUser(user) {
     if (currentUser?.phone !== user?.phone) clearQr();
+    const identityChanged=currentUser?.phone!==user?.phone;
     currentUser = user;
+    if(identityChanged)window.dispatchEvent(new Event('account-identity-changed'));
     if(el('account-loading'))el('account-loading').hidden=true;
     el('guest-view').hidden = !!user;
     el('member-view').hidden = !user;
@@ -139,14 +141,15 @@
     try{
       const {orders,nextCursor}=await api('orders'+(append&&historyCursor?'?cursor='+encodeURIComponent(historyCursor):''));
       if(currentUser?.phone!==expectedPhone)return;
-      const statuses={new:'Создан',accepted:'Принят',in_work:'Готовится',preparing:'Готовится',ready:'Готов',delivering:'В пути',completed:'Завершён',paid:'Оплачен',cancelled:'Отменён',canceled:'Отменён'};
-      const html=orders.map(order=>`<article class="account-order"><header class="account-order-heading"><div><small>${escape(order.external_id||'Онлайн-заказ')}</small><time>${escape(new Date(order.created_at).toLocaleString('ru-RU',{day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}))}</time></div><span class="account-order-status">${escape(statuses[order.status]||'Статус уточняется')}</span></header><p class="account-order-type">${escape(order.order_type||'Самовывоз')}</p><ul class="account-order-items">${(order.items||[]).map(item=>`<li><span>${escape(item.name)} <small>× ${Number(item.quantity)}</small></span><strong>${(Number(item.price)*Number(item.quantity)).toFixed(2)} BYN</strong></li>`).join('')}</ul><footer><span>Итого</span><strong>${Number(order.total||0).toFixed(2)} BYN</strong></footer></article>`).join('');
+      const statuses={new:'Создан',accepted:'Принят',in_work:'Принят',preparing:'Принят',ready:'Готов',delivering:'В пути',completed:'Завершён',paid:'Оплачен',cancelled:'Отменён',canceled:'Отменён'};
+      const html=orders.map(order=>`<article class="account-order"><header class="account-order-heading"><div><small>${escape(order.external_id||'Онлайн-заказ')}</small><time>${escape(new Date(order.created_at).toLocaleString('ru-RU',{day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}))}</time></div><span class="account-order-status">${escape(order.status==='ready'&&order.order_type==='Доставка'?'Готов и передан в доставку':statuses[order.status]||'Статус уточняется')}</span></header><p class="account-order-type">${escape(order.order_type||'Самовывоз')}</p><ul class="account-order-items">${(order.items||[]).map(item=>`<li><span>${escape(item.name)} <small>× ${Number(item.quantity)}</small></span><strong>${(Number(item.price)*Number(item.quantity)).toFixed(2)} BYN</strong></li>`).join('')}</ul><footer><span>Итого</span><strong>${Number(order.total||0).toFixed(2)} BYN</strong></footer></article>`).join('');
       if(append)el('member-orders').insertAdjacentHTML('beforeend',html);else el('member-orders').innerHTML=html||'<p>У вас пока нет онлайн-заказов.</p>';
       historyLoaded=true;historyCursor=nextCursor;if(more)more.hidden=!nextCursor;
     }catch(error){if(currentUser?.phone===expectedPhone){if(!append)el('member-orders').textContent=error.message;else message(error.message);}}
     finally{historyBusy=false;if(more)more.disabled=false;}
   }
   el('member-history').addEventListener('toggle',()=>{if(el('member-history').open&&!historyLoaded)void loadOrders();});
+  window.addEventListener('current-orders-changed',()=>{historyLoaded=false;historyCursor=null;if(currentUser&&el('member-history').open)void loadOrders();});
   el('orders-more')?.addEventListener('click',()=>loadOrders(true));
   el('logout-button').addEventListener('click', async () => {
     el('logout-button').disabled = true;

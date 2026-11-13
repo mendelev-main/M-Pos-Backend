@@ -57,8 +57,9 @@ test('receipt earns once across both Android messages, excludes free gifts, and 
   assert.equal(guest.status,'PENDING');const vt=new URL(guest.telegramUrl).searchParams.get('start');await verification.confirm(vt,guestData.phone,'123457');const guestOrder=await checkout.finalizeByVerificationToken(vt);assert.equal(guestOrder.ok,true);
   assert.equal((await query('SELECT public.loyalty_membership_active($1) AS active',[guestOrder.customerId])).rows[0].active,true);
   assert.equal(Number((await query('SELECT progress FROM public.loyalty_balance($1,$2)',[guestOrder.customerId,p])).rows[0].progress),0);await snapshot([guestOrder.orderId]);await receipt(guestOrder.orderId,[{productId:'cheap',quantity:1,unitPrice:3},{productId:'expensive',quantity:1,unitPrice:7}]);assert.equal(Number((await query('SELECT progress FROM public.loyalty_balance($1,$2)',[guestOrder.customerId,p])).rows[0].progress),2);
+  await query("UPDATE orders SET status='completed' WHERE phone=$1",[phone]);
   // Cursor history is bounded, stable on equal timestamps, and isolated by verified phone.
-  for(let i=0;i<9;i++)await query('INSERT INTO orders(phone,external_id) VALUES($1,$2)',[phone,'page-'+i]);
+  for(let i=0;i<9;i++)await query("INSERT INTO orders(phone,external_id,status) VALUES($1,$2,'completed')",[phone,'page-'+i]);
   let cursor=null,ids=[];do{const page=await account.orders(session,cursor);assert.ok(page.orders.length<=5);ids.push(...page.orders.map(x=>x.id));cursor=page.nextCursor;}while(cursor);assert.equal(new Set(ids).size,ids.length);assert.equal(ids.length,12);
  }finally{await db.close();}
 });
