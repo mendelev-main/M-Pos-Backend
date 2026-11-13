@@ -30,9 +30,9 @@ test('dashboard uses the verified phone, real memberships/balances, isolated pro
     await query("INSERT INTO public.loyalty_programs(name,required_quantity,is_active) VALUES('Архивная акция',3,FALSE)");
     await query(`INSERT INTO public.loyalty_ledger(customer_id,program_id,operation_type,progress_delta,reward_delta,idempotency_key)
       VALUES($1,$2,'EARN',7,0,'account-pizza'),($1,$3,'EARN',4,0,'account-coffee'),($4,$2,'EARN',2,0,'other-pizza')`, [customer,pizza,coffee,otherCustomer]);
-    const order = (await query("INSERT INTO public.orders(customer_id,phone,external_id,total) VALUES($1,$2,'my-order',15) RETURNING id", [customer,phone])).rows[0].id;
+    const order = (await query("INSERT INTO public.orders(customer_id,phone,external_id,total,status) VALUES($1,$2,'my-order',15,'completed') RETURNING id", [customer,phone])).rows[0].id;
     await query("INSERT INTO public.order_items(order_id,product_name,price,quantity) VALUES($1,'Мой кофе',5,3)", [order]);
-    await query("INSERT INTO public.orders(customer_id,phone,external_id,total) VALUES($1,$2,'private-other-order',999)", [otherCustomer,otherPhone]);
+    await query("INSERT INTO public.orders(customer_id,phone,external_id,total,status) VALUES($1,$2,'private-other-order',999,'completed')", [otherCustomer,otherPhone]);
     const session = 'a'.repeat(43), otherSession = 'b'.repeat(43);
     const hash = s => createHash('sha256').update(s).digest('hex');
     for (const [token, number] of [[session,phone],[otherSession,otherPhone]]) await query(`INSERT INTO public.customer_account_sessions(token_hash,phone,telegram_user_id,expires_at)

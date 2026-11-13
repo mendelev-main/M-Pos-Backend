@@ -24,7 +24,9 @@ export MPOS_FLYWAY_ENV_FILE="$tmp/flyway.env" MPOS_DOCKER_NETWORK="$network"
 bash "$root/scripts/flyway.sh" migrate
 bash "$root/scripts/flyway.sh" migrate
 bash "$root/scripts/flyway.sh" validate
-test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 16
+test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 17
+test "$(sql -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='orders' AND column_name IN ('ready_estimate','accepted_at','status_changed_at')")" = 3
+test "$(sql -Atc "SELECT count(*) FROM pg_trigger WHERE tgrelid='public.orders'::regclass AND tgname='track_order_stage' AND tgenabled='O'")" = 1
 test "$(sql -Atc "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND tablename='orders' AND indexname IN ('orders_device_history_page','orders_device_pending_page')")" = 2
 test "$(sql -Atc "SELECT count(*) FROM information_schema.columns WHERE table_name='orders' AND column_name LIKE 'delivery_tariff_%'")" = 3
 
@@ -49,7 +51,7 @@ sed -i 's@/mpos$@/legacy@' "$tmp/flyway.env"
 if bash "$root/scripts/flyway.sh" migrate > "$tmp/unbaselined.log" 2>&1; then echo 'Unsafe automatic baseline' >&2; exit 1; fi
 bash "$root/scripts/flyway.sh" baseline-v3-reviewed
 bash "$root/scripts/flyway.sh" migrate
-test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 13
+test "$(sql -Atc "SELECT count(*) FROM flyway_schema_history WHERE success AND type='SQL'")" = 14
 
 # A changed applied migration fails validation; no automatic repair is allowed.
 mkdir -p "$tmp/release/scripts" "$tmp/release/db/migrations"

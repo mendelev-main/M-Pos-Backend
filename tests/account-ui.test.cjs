@@ -13,8 +13,8 @@ test('account enters Telegram directly without reading or sending a phone field'
   };
   const context = {
     document: { getElementById: get, hidden: false, addEventListener() {} },
-    window: { addEventListener() {}, location: { assign(url) { navigations.push(url); } } },
-    Date, setTimeout() {}, clearTimeout() {},
+    window: { dispatchEvent() {}, addEventListener() {}, location: { assign(url) { navigations.push(url); } } },
+    Event:class Event{}, Date, setTimeout() {}, clearTimeout() {},
     fetch: async (url, options) => {
       requests.push({ url, options });
       const result = url.endsWith('/session') ? { user: null } : url.endsWith('/complete') ? { status: 'MISSING' } : { telegramUrl: 'https://t.me/test_bot?start=token', expiresAt: new Date(Date.now() + 300000).toISOString() };
@@ -39,7 +39,7 @@ test('signed-in dashboard hides guest promotions and renders the returned loyalt
     return elements.get(id);
   };
   const user = {phone:'+375291234567',name:'Тестовый участник',delivery_address:'Тестовая, 12',membership_active:true,programs:[{name:'Кофе <script>',required_quantity:5,progress:4,rewards:0}]};
-  const context = {document:{getElementById:get,hidden:false,addEventListener(){}},window:{addEventListener(){}},Date,setTimeout(){},clearTimeout(){},fetch:async()=>({ok:true,json:async()=>({user})})};
+  const context = {document:{getElementById:get,hidden:false,addEventListener(){}},window:{dispatchEvent(){},addEventListener(){}},Event:class Event{},Event:class Event{},Date,setTimeout(){},clearTimeout(){},fetch:async()=>({ok:true,json:async()=>({user})})};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/loyalty-cards.js'),'utf8'),context);
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/account/account.js'),'utf8'),context);
   await new Promise(resolve=>setImmediate(resolve));
@@ -54,7 +54,7 @@ test('signed-in dashboard hides guest promotions and renders the returned loyalt
 test('QR enlargement waits for the image, restores scrolling, and clears on error or logout', async () => {
   const elements=new Map();let user={phone:'+375290000099',name:'Тест',programs:[]};
   const get=id=>{if(!elements.has(id))elements.set(id,{events:{},hidden:true,open:false,disabled:true,innerHTML:'',textContent:'',value:'',addEventListener(name,handler){this.events[name]=handler},getAttribute(name){return this[name]||null},removeAttribute(name){delete this[name]},focus(){},showModal(){this.open=true},close(){this.open=false;this.events.close?.()}});return elements.get(id)};
-  const context={document:{getElementById:get,hidden:false,body:{style:{overflow:'auto'}},addEventListener(){}},window:{addEventListener(){}},Date,setTimeout(){},clearTimeout(){},fetch:async url=>{if(url.endsWith('/logout'))user=null;return {ok:true,json:async()=>({user,status:'MISSING'})}}};
+  const context={document:{getElementById:get,hidden:false,body:{style:{overflow:'auto'}},addEventListener(){}},window:{dispatchEvent(){},addEventListener(){}},Event:class Event{},Event:class Event{},Date,setTimeout(){},clearTimeout(){},fetch:async url=>{if(url.endsWith('/logout'))user=null;return {ok:true,json:async()=>({user,status:'MISSING'})}}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/account/account.js'),'utf8'),context);
   await new Promise(setImmediate);
   get('open-qr').events.click();assert.equal(get('qr-dialog').open,false);
@@ -69,7 +69,7 @@ test('QR enlargement waits for the image, restores scrolling, and clears on erro
 test('minimal Telegram pending screen restarts and completes automatically without a confirmation button', async () => {
   const elements=new Map(),visibility={};let status='MISSING',user=null;
   const get=id=>{assert.ok(!['account-tagline','telegram-link','check-login'].includes(id));if(!elements.has(id))elements.set(id,{hidden:true,open:false,value:'',innerHTML:'',textContent:'',addEventListener(event,handler){this[event]=handler},getAttribute(name){return this[name]||null},removeAttribute(name){delete this[name]},focus(){}});return elements.get(id)};
-  const c={document:{getElementById:get,hidden:false,addEventListener(name,handler){visibility[name]=handler}},window:{addEventListener(){},location:{assign(){}}},Date,setTimeout(){},clearTimeout(){},fetch:async url=>({ok:true,json:async()=>url.endsWith('/session')?{user}:url.endsWith('/complete')?{status}:{telegramUrl:'https://t.me/test_bot?start=example',expiresAt:new Date(Date.now()+300000).toISOString()}})};
+  const c={document:{getElementById:get,hidden:false,addEventListener(name,handler){visibility[name]=handler}},window:{dispatchEvent(){},addEventListener(){},location:{assign(){}}},Event:class Event{},Event:class Event{},Date,setTimeout(){},clearTimeout(){},fetch:async url=>({ok:true,json:async()=>url.endsWith('/session')?{user}:url.endsWith('/complete')?{status}:{telegramUrl:'https://t.me/test_bot?start=example',expiresAt:new Date(Date.now()+300000).toISOString()}})};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/account/account.js'),'utf8'),c);await new Promise(setImmediate);
   await get('login-form').submit({preventDefault(){}});assert.equal(get('login-form').hidden,true);assert.equal(get('telegram-step').hidden,false);
   get('restart-login').click();assert.equal(get('login-form').hidden,false);assert.equal(get('telegram-step').hidden,true);
