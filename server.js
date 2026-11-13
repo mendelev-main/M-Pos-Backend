@@ -1,3 +1,4 @@
+import { mountDeviceOrderEvents } from './device-order-events.js';
 import { applyLoyaltyReceipt } from './loyalty-sales.js';
 import { verifyPosAdministrationPassword } from './pos-administration-auth.js';
 import { mountCustomerAccount } from './customer-account.js';
@@ -803,6 +804,8 @@ app.post("/api/orders", async (req, res) => {
   return res.status(410).json({error:"Используйте актуальную форму оформления заказа",code:"USE_CHECKOUT"});
 
 });
+
+mountDeviceOrderEvents(app, { query, requireDevice });
 
 app.get("/api/orders/:token",async(req,res)=>{try{const token=String(req.params.token||"").trim();if(!token)return res.status(400).json({error:"Missing token"});const {rows}=await query(`SELECT o.id,o.external_id,o.status,o.order_type,o.customer_name,o.phone,o.address,o.comment,o.total,o.delivery_fee,o.delivery_fee_pending,o.discount_total,o.delivery_tariff_id,o.delivery_tariff_name,o.delivery_tariff_version,o.created_at,o.updated_at,COALESCE((SELECT jsonb_agg(jsonb_build_object('product_name',i.product_name,'price',i.price,'quantity',i.quantity,'comment',i.comment,'is_loyalty_reward',i.is_loyalty_reward,'loyalty_program_id',i.loyalty_program_id) ORDER BY i.created_at,i.id) FROM public.order_items i WHERE i.order_id=o.id),'[]'::jsonb) AS order_items FROM public.orders o WHERE o.tracking_token=$1 LIMIT 1`,[token]);const order=rows?.[0];if(!order)return res.status(404).json({error:"Заказ не найден"});res.json({order});}catch(error){console.error("GET /api/orders/:token:",error);res.status(500).json({error:"Не удалось загрузить заказ"})}});
 
