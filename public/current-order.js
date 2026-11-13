@@ -4,10 +4,33 @@
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const money=value=>Number(value||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})+' BYN';
   const dock=document.createElement('aside');dock.className='current-order-dock';dock.hidden=true;dock.setAttribute('aria-label','Текущие заказы');header.after(dock);
+  const anchor=document.createElement('div');anchor.className='current-order-anchor';anchor.setAttribute('aria-hidden','true');dock.before(anchor);
   const dialog=document.createElement('dialog');dialog.className='current-order-details';dialog.setAttribute('aria-labelledby','current-order-details-title');document.body.append(dialog);
   let orders=[],offset=0,timer,expiryTimer,busy=false,generation=0,signature='',activeId=null,previousOverflow='',returnFocus;
   const now=()=>Date.now()+offset;
   function resize(){document.documentElement.style.setProperty('--current-order-offset',dock.hidden?'0px':dock.getBoundingClientRect().height+'px');}
+  const scrollSpace=document.createElement('div');scrollSpace.className='current-order-scroll-space';scrollSpace.setAttribute('aria-hidden','true');document.body.append(scrollSpace);
+  let scrollFrame=0,collapseSpace=0;
+  function compact(){
+    scrollFrame=0;
+    // The anchor stays in normal flow, so shrinking the sticky card cannot move its threshold.
+    const progress=dock.hidden?0:Math.max(0,Math.min(1,(48-anchor.getBoundingClientRect().top)/48));
+    // Preserve scroll range on short pages while the tile gives its height back to the content.
+    scrollSpace.style.height=progress*collapseSpace+'px';
+    dock.style.setProperty('--order-collapse',String(progress));
+    dock.classList.toggle('is-compact',progress===1);
+    dock.querySelectorAll('.current-order-heading').forEach(heading=>{heading.inert=progress===1;});
+    resize();
+  }
+  function scheduleCompact(){if(!scrollFrame)scrollFrame=requestAnimationFrame(compact);}
+  function measure(){
+    collapseSpace=0;
+    const margin=parseFloat(getComputedStyle(dock).getPropertyValue('--order-step-margin'))||17;
+    dock.querySelectorAll('.current-order-heading-content').forEach(content=>{const height=content.getBoundingClientRect().height;content.parentElement.style.setProperty('--order-heading-height',height+'px');collapseSpace+=height+margin;});
+    compact();
+  }
+  window.addEventListener('scroll',scheduleCompact,{passive:true});
+  window.addEventListener('resize',measure);
   function close(){dialog.close();}
   function details(id,open=true){
     const order=orders.find(o=>o.id===id);if(!order)return;
@@ -22,13 +45,13 @@
     clearTimeout(expiryTimer);
     const visible=orders.filter(o=>!state.describe(o,now()).expired),next=JSON.stringify(visible);
     if(next!==signature){
-      const previous=signature;signature=next;dock.hidden=!visible.length;
+      const previous=signature;signature=next;dock.hidden=!visible.length;document.body.classList.toggle('has-current-orders',!!visible.length);
       dock.innerHTML=visible.map(order=>{
         const view=state.describe(order,now());
-        return `<section class="current-order ${view.className}"><div class="current-order-inner"><div class="current-order-top"><button type="button" class="order-summary-button" data-order-id="${escape(order.id)}" aria-label="Открыть ${escape(order.external_id||'заказ')}">${escape(order.external_id||'Ваш заказ')}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></button><span class="current-order-type">${escape(order.order_type||'Самовывоз')}</span></div><h2 class="current-order-status" role="status">${escape(view.title)}</h2><p class="current-order-note">${escape(view.note)}</p><ol class="order-steps" aria-label="Этапы заказа" style="--stage-count:3">${view.stages.map((label,i)=>`<li class="order-step ${i<view.step?'done':i===view.step?'active':''}" ${i===view.step?'aria-current="step"':''}><span class="order-step-bar" aria-hidden="true"></span><span>${label}</span></li>`).join('')}</ol></div></section>`;
+        return `<section class="current-order ${view.className}"><div class="current-order-inner"><div class="current-order-heading"><div class="current-order-heading-content"><div class="current-order-top"><button type="button" class="order-summary-button" data-order-id="${escape(order.id)}" aria-label="Открыть ${escape(order.external_id||'заказ')}">${escape(order.external_id||'Ваш заказ')}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></button><span class="current-order-type">${escape(order.order_type||'Самовывоз')}</span></div><h2 class="current-order-status" role="status">${escape(view.title)}</h2><p class="current-order-note">${escape(view.note)}</p></div></div><ol class="order-steps" aria-label="Этапы заказа" style="--stage-count:3">${view.stages.map((label,i)=>`<li class="order-step ${i<view.step?'done':i===view.step?'active':''}" ${i===view.step?'aria-current="step"':''}><span class="order-step-bar" aria-hidden="true"></span><span>${label}</span></li>`).join('')}</ol></div></section>`;
       }).join('');
       dock.querySelectorAll('[data-order-id]').forEach(button=>button.onclick=()=>details(button.dataset.orderId));
-      resize();
+      measure();
       if(dialog.open){if(visible.some(o=>o.id===activeId))details(activeId,false);else close();}
       if(previous)window.dispatchEvent(new Event('current-orders-changed'));
     }

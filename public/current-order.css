@@ -27,3 +27,13 @@
 @media(prefers-reduced-motion:reduce){.current-order::before,.current-order::after{animation:none;--order-light-angle:105deg}}
 
 .current-order+.current-order{margin-top:14px}.current-order-dock:empty{display:none}.current-order-details button{cursor:pointer}.current-order-type{flex-shrink:0}
+
+/* Keep the shrinking sticky tile from pulling the browser's scroll anchor with it. */
+body.has-current-orders{overflow-anchor:none}
+.current-order-anchor{height:0;pointer-events:none}
+.current-order-heading{display:grid;grid-template-rows:minmax(0,calc((1 - var(--order-collapse,0))*var(--order-heading-height,90px)));overflow:hidden;opacity:calc(1 - var(--order-collapse,0))}
+.current-order-heading-content{min-height:0;align-self:start}
+.current-order-dock{--order-step-margin:17px}
+.current-order-dock .order-steps{margin-top:calc(var(--order-step-margin)*(1 - var(--order-collapse,0)))}
+.current-order-scroll-space{height:0;pointer-events:none;overflow:hidden}
+@media(max-width:560px){.current-order-dock{--order-step-margin:15px}}
