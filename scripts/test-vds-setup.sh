@@ -31,10 +31,13 @@ docker run -d --name mpos-postgres --network "$network" \
   -e POSTGRES_USER=mpos_admin -e POSTGRES_DB=mpos -e POSTGRES_PASSWORD=fixture-only-password \
   postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3 >/dev/null
 sql(){ docker exec -i mpos-postgres psql -X -U mpos_admin -d mpos -v ON_ERROR_STOP=1 "$@"; }
+# Wait for the final TCP server, not the temporary initialization socket.
+ready=false
 for attempt in {1..60}; do
-  if docker exec mpos-postgres pg_isready -U mpos_admin -d mpos >/dev/null 2>&1; then break; fi
+  if docker exec mpos-postgres pg_isready -h 127.0.0.1 -U mpos_admin -d mpos >/dev/null 2>&1; then ready=true; break; fi
   sleep 1
 done
+$ready || { echo 'Fixture PostgreSQL did not start' >&2; exit 1; }
 sql -c 'CREATE ROLE mpos_app' >/dev/null
 for file in "$root/db/migrations/00"{1,2,3}_*.sql; do sql < "$file" >/dev/null; done
 sql -c "INSERT INTO devices(device_key,name) VALUES('fixture-tablet-key','Fixture tablet'); ALTER TABLE orders ADD COLUMN unexpected_column text" >/dev/null

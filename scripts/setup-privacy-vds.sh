@@ -21,7 +21,7 @@ image=$(docker inspect --format '{{.Image}}' mpos-postgres)
 docker run -d --name "$audit" --network none -e POSTGRES_USER=mpos_admin -e POSTGRES_DB=restore_check -e POSTGRES_HOST_AUTH_METHOD=trust "$image" >/dev/null
 ready=false
 for attempt in {1..60}; do
- if docker exec "$audit" pg_isready -U mpos_admin -d restore_check >/dev/null 2>&1; then ready=true; break; fi
+ if docker exec "$audit" pg_isready -h 127.0.0.1 -U mpos_admin -d restore_check >/dev/null 2>&1; then ready=true; break; fi
  sleep 1
 done
 $ready || { echo 'Restore check did not start; contact deletion remains unchanged' >&2; exit 1; }
